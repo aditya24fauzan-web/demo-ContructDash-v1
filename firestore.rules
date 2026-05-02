@@ -1,0 +1,221 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && (
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && getUserData().role == 'admin') ||
+        (request.auth.token.email == "fadzillahfauzan0@gmail.com" && request.auth.token.email_verified == true)
+      );
+    }
+
+    function isManager() {
+      return isAuthenticated() && exists(/databases/$(database)/documents/users/$(request.auth.uid)) && getUserData().role == 'manager';
+    }
+
+    function isPC() {
+      return isAuthenticated() && exists(/databases/$(database)/documents/users/$(request.auth.uid)) && getUserData().role == 'pc';
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function hasAllRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    function isValidString(val, minLen, maxLen) {
+      return val is string && val.size() >= minLen && val.size() <= maxLen;
+    }
+
+    function isValidNumber(val, minVal) {
+      return val is number && val >= minVal;
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+    function isValidUser(data) {
+      return hasAllRequiredFields(['uid', 'name', 'email', 'role', 'createdAt']) &&
+             isValidString(data.uid, 1, 100) &&
+             isValidString(data.name, 1, 100) &&
+             (data.email == '' || isValidString(data.email, 5, 100)) &&
+             data.role in ['admin', 'manager', 'pc'] &&
+             data.createdAt is string;
+    }
+
+    function isValidProject(data) {
+      return hasOnlyAllowedFields(['customId', 'name', 'location', 'startDate', 'deadline', 'estimatedDays', 'currentDay', 'progress', 'status', 'createdAt']) &&
+             (data.customId == null || isValidString(data.customId, 0, 100)) &&
+             isValidString(data.name, 1, 100) &&
+             isValidString(data.location, 1, 200) &&
+             data.startDate is string &&
+             data.deadline is string &&
+             isValidNumber(data.estimatedDays, 1) &&
+             isValidNumber(data.currentDay, 0) &&
+             isValidNumber(data.progress, 0) &&
+             data.progress <= 100 &&
+             data.status in ['active', 'completed', 'delayed'] &&
+             data.createdAt is string;
+    }
+
+    function isValidReport(data) {
+      return hasOnlyAllowedFields(['projectId', 'projectName', 'projectCustomId', 'userId', 'date', 'location', 'workerCount', 'issues', 'photoUrl', 'status', 'createdAt']) &&
+             isValidString(data.projectId, 1, 100) &&
+             (data.projectName == null || isValidString(data.projectName, 1, 200)) &&
+             (data.projectCustomId == null || isValidString(data.projectCustomId, 0, 100)) &&
+             isValidString(data.userId, 1, 100) &&
+             data.date is string &&
+             isValidString(data.location, 1, 200) &&
+             isValidNumber(data.workerCount, 0) &&
+             (data.issues == null || isValidString(data.issues, 0, 5000)) &&
+             (data.photoUrl == null || isValidString(data.photoUrl, 0, 1048576)) &&
+             data.status in ['pending', 'approved', 'rejected'] &&
+             data.createdAt is string;
+    }
+
+    function isValidActivity(data) {
+      return hasOnlyAllowedFields(['reportId', 'projectId', 'dayNumber', 'date', 'description', 'createdAt']) &&
+             isValidString(data.reportId, 1, 100) &&
+             isValidString(data.projectId, 1, 100) &&
+             isValidNumber(data.dayNumber, 1) &&
+             data.date is string &&
+             isValidString(data.description, 1, 1000) &&
+             data.createdAt is string;
+    }
+
+    function isValidTransaction(data) {
+      return hasOnlyAllowedFields(['projectId', 'projectName', 'invoiceId', 'payableId', 'type', 'category', 'amount', 'date', 'description', 'status', 'createdBy', 'createdAt', 'referenceNo', 'paymentMethod', 'proofUrl']) &&
+             (data.projectId == null || isValidString(data.projectId, 0, 100)) &&
+             (data.projectName == null || isValidString(data.projectName, 0, 200)) &&
+             (data.invoiceId == null || isValidString(data.invoiceId, 0, 100)) &&
+             (data.payableId == null || isValidString(data.payableId, 0, 100)) &&
+             data.type in ['INCOME', 'EXPENSE'] &&
+             isValidString(data.category, 1, 100) &&
+             isValidNumber(data.amount, 0) &&
+             data.date is string &&
+             isValidString(data.description, 1, 5000) &&
+             data.status in ['PENDING', 'COMPLETED', 'CANCELLED'] &&
+             (data.referenceNo == null || isValidString(data.referenceNo, 0, 100)) &&
+             (data.paymentMethod == null || isValidString(data.paymentMethod, 0, 100)) &&
+             (data.proofUrl == null || isValidString(data.proofUrl, 0, 1000)) &&
+             isValidString(data.createdBy, 1, 100) &&
+             data.createdAt is string;
+    }
+
+    function isValidInvoice(data) {
+      return hasOnlyAllowedFields(['invoiceNo', 'projectId', 'projectName', 'clientName', 'term', 'amount', 'paidAmount', 'date', 'dueDate', 'notes', 'status', 'fileUrl', 'createdBy', 'createdAt']) &&
+             isValidString(data.invoiceNo, 1, 100) &&
+             isValidString(data.projectId, 1, 100) &&
+             (data.projectName == null || isValidString(data.projectName, 0, 200)) &&
+             isValidString(data.clientName, 1, 100) &&
+             isValidString(data.term, 1, 100) &&
+             isValidNumber(data.amount, 0) &&
+             isValidNumber(data.paidAmount, 0) &&
+             data.date is string &&
+             data.dueDate is string &&
+             (data.notes == null || isValidString(data.notes, 0, 5000)) &&
+             data.status in ['DRAFT', 'SENT', 'UNPAID', 'PARTIAL', 'PAID', 'OVERDUE'] &&
+             (data.fileUrl == null || isValidString(data.fileUrl, 0, 2000)) &&
+             isValidString(data.createdBy, 1, 100) &&
+             data.createdAt is string;
+    }
+
+    function isValidPayable(data) {
+      return hasOnlyAllowedFields(['vendorName', 'projectId', 'projectName', 'amount', 'paidAmount', 'dueDate', 'status', 'description', 'createdBy', 'createdAt']) &&
+             isValidString(data.vendorName, 1, 100) &&
+             (data.projectId == null || isValidString(data.projectId, 0, 100)) &&
+             (data.projectName == null || isValidString(data.projectName, 0, 200)) &&
+             isValidNumber(data.amount, 0) &&
+             isValidNumber(data.paidAmount, 0) &&
+             data.dueDate is string &&
+             data.status in ['UNPAID', 'PARTIAL', 'PAID', 'OVERDUE'] &&
+             (data.description == null || isValidString(data.description, 0, 5000)) &&
+             isValidString(data.createdBy, 1, 100) &&
+             data.createdAt is string;
+    }
+
+    function isValidBudget(data) {
+      return hasOnlyAllowedFields(['projectId', 'projectName', 'category', 'plannedAmount', 'createdAt']) &&
+             isValidString(data.projectId, 1, 100) &&
+             (data.projectName == null || isValidString(data.projectName, 0, 200)) &&
+             isValidString(data.category, 1, 100) &&
+             isValidNumber(data.plannedAmount, 0) &&
+             data.createdAt is string;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidUser(request.resource.data) && (isAdmin() || isOwner(userId));
+      allow update: if isAuthenticated() && isValidUser(request.resource.data) && (isAdmin() || isOwner(userId));
+      allow delete: if isAdmin();
+    }
+
+    match /projects/{projectId} {
+      allow read: if isAuthenticated();
+      allow create: if isAdmin() && isValidProject(request.resource.data);
+      allow update: if (isAdmin() || isManager() || isPC()) && isValidProject(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    match /reports/{reportId} {
+      allow read: if isAuthenticated();
+      allow create: if (isAdmin() || isPC()) && isValidReport(request.resource.data) && request.resource.data.userId == request.auth.uid;
+      allow update: if (isAdmin() || isManager() || isPC()) && isValidReport(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    match /activities/{activityId} {
+      allow read: if isAuthenticated();
+      allow create: if (isAdmin() || isPC()) && isValidActivity(request.resource.data);
+      allow update: if (isAdmin() || isManager()) && isValidActivity(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    match /transactions/{transactionId} {
+      allow read: if isAuthenticated();
+      allow create: if (isAdmin() || isManager()) && isValidTransaction(request.resource.data);
+      allow update: if (isAdmin() || isManager()) && isValidTransaction(request.resource.data);
+      allow delete: if isAdmin() || isManager();
+    }
+
+    match /invoices/{invoiceId} {
+      allow read: if isAuthenticated();
+      allow create: if (isAdmin() || isManager()) && isValidInvoice(request.resource.data);
+      allow update: if (isAdmin() || isManager()) && isValidInvoice(request.resource.data);
+      allow delete: if isAdmin() || isManager();
+    }
+
+    match /payables/{payableId} {
+      allow read: if isAuthenticated();
+      allow create: if (isAdmin() || isManager()) && isValidPayable(request.resource.data);
+      allow update: if (isAdmin() || isManager()) && isValidPayable(request.resource.data);
+      allow delete: if isAdmin() || isManager();
+    }
+
+    match /budgets/{budgetId} {
+      allow read: if isAuthenticated();
+      allow create: if (isAdmin() || isManager()) && isValidBudget(request.resource.data);
+      allow update: if (isAdmin() || isManager()) && isValidBudget(request.resource.data);
+      allow delete: if isAdmin() || isManager();
+    }
+  }
+}

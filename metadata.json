@@ -1,0 +1,5 @@
+{
+  "name": "ConstructDash",
+  "description": "Aplikasi pelaporan harian konstruksi lapangan.",
+  "requestFramePermissions": ["camera"]
+}

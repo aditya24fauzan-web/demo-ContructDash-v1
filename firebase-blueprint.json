@@ -1,0 +1,83 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile and role information",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Firebase Auth UID" },
+        "name": { "type": "string", "description": "User's full name" },
+        "email": { "type": "string", "format": "email", "description": "User's email address" },
+        "role": { "type": "string", "enum": ["admin", "manager", "pc"], "description": "User's role in the system" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "name", "email", "role", "createdAt"]
+    },
+    "Project": {
+      "title": "Project",
+      "description": "Construction project details",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Project name" },
+        "location": { "type": "string", "description": "Project location" },
+        "startDate": { "type": "string", "format": "date-time" },
+        "deadline": { "type": "string", "format": "date-time" },
+        "estimatedDays": { "type": "number", "description": "Estimated days to complete" },
+        "currentDay": { "type": "number", "description": "Current day of progress" },
+        "progress": { "type": "number", "description": "Progress percentage (0-100)" },
+        "status": { "type": "string", "enum": ["active", "completed", "delayed"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "location", "startDate", "deadline", "estimatedDays", "currentDay", "progress", "status", "createdAt"]
+    },
+    "Report": {
+      "title": "Report",
+      "description": "Daily report submitted by Project Coordinator",
+      "type": "object",
+      "properties": {
+        "projectId": { "type": "string", "description": "Reference to Project" },
+        "userId": { "type": "string", "description": "Reference to User (PC)" },
+        "date": { "type": "string", "format": "date-time" },
+        "location": { "type": "string" },
+        "workerCount": { "type": "number", "description": "Number of workers on site" },
+        "issues": { "type": "string", "description": "Constraints or issues encountered" },
+        "photoUrl": { "type": "string", "format": "uri" },
+        "status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["projectId", "userId", "date", "location", "workerCount", "status", "createdAt"]
+    },
+    "Activity": {
+      "title": "Activity",
+      "description": "Specific activity within a daily report",
+      "type": "object",
+      "properties": {
+        "reportId": { "type": "string", "description": "Reference to Report" },
+        "projectId": { "type": "string", "description": "Reference to Project for easier querying" },
+        "dayNumber": { "type": "number", "description": "Day number of the project" },
+        "date": { "type": "string", "format": "date-time" },
+        "description": { "type": "string", "description": "Description of the work done" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["reportId", "projectId", "dayNumber", "date", "description", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "Stores user profiles and roles"
+    },
+    "/projects/{projectId}": {
+      "schema": { "$ref": "#/entities/Project" },
+      "description": "Stores construction projects"
+    },
+    "/reports/{reportId}": {
+      "schema": { "$ref": "#/entities/Report" },
+      "description": "Stores daily reports"
+    },
+    "/activities/{activityId}": {
+      "schema": { "$ref": "#/entities/Activity" },
+      "description": "Stores individual activities linked to reports"
+    }
+  }
+}
