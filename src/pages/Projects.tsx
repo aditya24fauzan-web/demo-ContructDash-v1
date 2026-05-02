@@ -1,0 +1,369 @@
+import React, { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
+import { collection, onSnapshot, query, addDoc, updateDoc, deleteDoc, doc } from 'firebase/firestore';
+import { db, Project } from '../lib/db';
+import { useAuth } from '../lib/auth';
+import { Plus, Edit2, Trash2, X, Search, FileText } from 'lucide-react';
+import { ConfirmModal } from '../components/ConfirmModal';
+
+import { CurrencyInput } from '../components/CurrencyInput';
+
+export function Projects() {
+  const { profile } = useAuth();
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
+  const [editingProject, setEditingProject] = useState<Project | null>(null);
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  
+  const [formData, setFormData] = useState({
+    name: '',
+    customId: '',
+    location: '',
+    startDate: '',
+    deadline: '',
+    estimatedDays: 0,
+    contractValue: 0,
+    status: 'active' as 'active' | 'completed' | 'delayed'
+  });
+
+  useEffect(() => {
+    const unsub = onSnapshot(query(collection(db, 'projects')), (snapshot) => {
+      setProjects(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Project)));
+    });
+    return () => unsub();
+  }, []);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (formData.estimatedDays <= 0) {
+      setErrorMsg("Estimasi hari harus lebih dari 0");
+      return;
+    }
+
+    setIsSubmitting(true);
+    setErrorMsg('');
+    try {
+      if (editingProject?.id) {
+        await updateDoc(doc(db, 'projects', editingProject.id), {
+          ...formData,
+        });
+      } else {
+        await addDoc(collection(db, 'projects'), {
+          ...formData,
+          currentDay: 0,
+          progress: 0,
+          createdAt: new Date().toISOString()
+        });
+      }
+      setIsModalOpen(false);
+      resetForm();
+    } catch (error) {
+      console.error("Error saving project:", error);
+      setErrorMsg("Gagal menyimpan project. Pastikan koneksi atau izin valid.");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleDelete = async (id: string) => {
+    try {
+      await deleteDoc(doc(db, 'projects', id));
+      setDeleteConfirmId(null);
+    } catch (error) {
+      console.error("Error deleting project:", error);
+      alert("Gagal menghapus project");
+    }
+  };
+
+  const resetForm = () => {
+    setFormData({
+      name: '',
+      customId: '',
+      location: '',
+      startDate: '',
+      deadline: '',
+      estimatedDays: 0,
+      contractValue: 0,
+      status: 'active'
+    });
+    setEditingProject(null);
+  };
+
+  const openEditModal = (project: Project) => {
+    setEditingProject(project);
+    setFormData({
+      name: project.name,
+      customId: project.customId || '',
+      location: project.location,
+      startDate: project.startDate.split('T')[0],
+      deadline: project.deadline.split('T')[0],
+      estimatedDays: project.estimatedDays,
+      contractValue: project.contractValue || 0,
+      status: project.status
+    });
+    setIsModalOpen(true);
+  };
+
+  const canEdit = profile?.role === 'admin' || profile?.role === 'manager';
+
+  const filteredProjects = projects.filter(project => {
+    const query = searchQuery.toLowerCase();
+    return project.name.toLowerCase().includes(query) || 
+           project.location.toLowerCase().includes(query);
+  });
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+        <h1 className="text-2xl font-bold text-gray-900">Projects</h1>
+        <div className="flex w-full sm:w-auto items-center gap-3">
+          <div className="relative w-full sm:w-64">
+            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+              <Search className="h-5 w-5 text-gray-400" />
+            </div>
+            <input
+              type="text"
+              placeholder="Cari project atau lokasi..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-md leading-5 bg-white placeholder-gray-500 focus:outline-none focus:placeholder-gray-400 focus:ring-1 focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+            />
+          </div>
+          {profile?.role === 'admin' && (
+            <button
+              onClick={() => { resetForm(); setIsModalOpen(true); }}
+              className="bg-blue-600 shrink-0 text-white px-4 py-2 rounded-md flex items-center gap-2 hover:bg-blue-700"
+            >
+              <Plus size={20} />
+              <span className="hidden sm:inline">Tambah Project</span>
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {filteredProjects.map(project => (
+          <div key={project.id} className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
+            <div className="flex justify-between items-start mb-4">
+              <div>
+                <h3 className="font-bold text-lg text-gray-900">{project.name}</h3>
+                {project.customId && <p className="text-xs font-semibold text-blue-600 mb-1">{project.customId}</p>}
+                <p className="text-sm text-gray-500">{project.location}</p>
+              </div>
+              <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${
+                project.status === 'active' ? 'bg-blue-100 text-blue-800' :
+                project.status === 'completed' ? 'bg-green-100 text-green-800' :
+                'bg-red-100 text-red-800'
+              }`}>
+                {project.status.toUpperCase()}
+              </span>
+            </div>
+
+            <div className="space-y-2 mb-4">
+              <div className="flex justify-between text-sm">
+                <span className="text-gray-500">Progress</span>
+                <span className="font-medium">{project.progress.toFixed(1)}%</span>
+              </div>
+              <div className="w-full bg-gray-200 rounded-full h-2">
+                <div 
+                  className="bg-blue-600 h-2 rounded-full" 
+                  style={{ width: `${project.progress}%` }}
+                ></div>
+              </div>
+              <p className="text-xs text-gray-500 text-right">
+                Hari {project.currentDay} / {project.estimatedDays}
+              </p>
+            </div>
+
+            <div className="text-sm text-gray-600 space-y-1 mb-4">
+              <p>Mulai: {new Date(project.startDate).toLocaleDateString('id-ID')}</p>
+              <p>Deadline: {new Date(project.deadline).toLocaleDateString('id-ID')}</p>
+              {project.contractValue ? <p className="font-semibold text-gray-800">Nilai Kontrak: Rp {project.contractValue.toLocaleString('id-ID')}</p> : null}
+            </div>
+
+            <div className="flex gap-2 pt-4 border-t border-gray-100 mt-4">
+              <Link
+                to={`/projects/${project.id}`}
+                className={`${canEdit ? 'flex-1' : 'w-full'} flex items-center justify-center gap-1 px-3 py-1.5 text-sm font-medium text-emerald-600 bg-emerald-50 rounded-md hover:bg-emerald-100`}
+              >
+                <FileText size={16} /> Detail
+              </Link>
+              
+              {canEdit && (
+                <>
+                  <button
+                    onClick={() => openEditModal(project)}
+                    className="flex-1 flex items-center justify-center gap-1 px-3 py-1.5 text-sm font-medium text-blue-600 bg-blue-50 rounded-md hover:bg-blue-100"
+                  >
+                    <Edit2 size={16} /> Edit
+                  </button>
+                  {profile?.role === 'admin' && (
+                    <button
+                      onClick={() => project.id && setDeleteConfirmId(project.id)}
+                      className="flex-1 flex items-center justify-center gap-1 px-3 py-1.5 text-sm font-medium text-red-600 bg-red-50 rounded-md hover:bg-red-100"
+                    >
+                      <Trash2 size={16} /> Hapus
+                    </button>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+        ))}
+        {filteredProjects.length === 0 && (
+          <div className="col-span-full py-12 text-center text-gray-500 bg-white rounded-xl border border-gray-100 border-dashed">
+            <p>Tidak ada project yang ditemukan.</p>
+          </div>
+        )}
+      </div>
+
+      {/* Modal */}
+      {isModalOpen && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-center p-4 border-b border-gray-100">
+              <h2 className="text-lg font-bold text-gray-900">
+                {editingProject ? 'Edit Project' : 'Tambah Project Baru'}
+              </h2>
+              <button onClick={() => setIsModalOpen(false)} className="text-gray-500 hover:text-gray-700">
+                <X size={24} />
+              </button>
+            </div>
+            
+            <form onSubmit={handleSubmit} className="p-4 space-y-4">
+              {errorMsg && (
+                <div className="bg-red-50 text-red-600 p-3 rounded-md text-sm mb-4">
+                  {errorMsg}
+                </div>
+              )}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Nama Project</label>
+                <input
+                  type="text"
+                  required
+                  value={formData.name}
+                  onChange={e => setFormData({...formData, name: e.target.value})}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">ID Project (Opsional)</label>
+                <input
+                  type="text"
+                  value={formData.customId}
+                  onChange={e => setFormData({...formData, customId: e.target.value})}
+                  placeholder="Contoh: PRJ-001"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Lokasi</label>
+                <input
+                  type="text"
+                  required
+                  value={formData.location}
+                  onChange={e => setFormData({...formData, location: e.target.value})}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Tanggal Mulai</label>
+                  <input
+                    type="date"
+                    required
+                    value={formData.startDate}
+                    onChange={e => setFormData({...formData, startDate: e.target.value})}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Deadline</label>
+                  <input
+                    type="date"
+                    required
+                    value={formData.deadline}
+                    onChange={e => setFormData({...formData, deadline: e.target.value})}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Estimasi Hari Pengerjaan</label>
+                <input
+                  type="number"
+                  required
+                  min="1"
+                  value={Number.isNaN(formData.estimatedDays) ? '' : formData.estimatedDays === 0 ? '' : formData.estimatedDays}
+                  onChange={e => setFormData({...formData, estimatedDays: e.target.value === '' ? 0 : parseInt(e.target.value)})}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Nilai Kontrak (Rp) - Opsional</label>
+                <CurrencyInput
+                  value={formData.contractValue || 0}
+                  onChange={val => setFormData({...formData, contractValue: val})}
+                  placeholder="Contoh: 150000000"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+
+              {editingProject && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Status</label>
+                  <select
+                    value={formData.status}
+                    onChange={e => setFormData({...formData, status: e.target.value as any})}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="active">Active</option>
+                    <option value="completed">Completed</option>
+                    <option value="delayed">Delayed</option>
+                  </select>
+                </div>
+              )}
+
+              <div className="pt-4 flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsModalOpen(false);
+                    setErrorMsg('');
+                  }}
+                  disabled={isSubmitting}
+                  className="flex-1 px-4 py-2 border border-gray-300 text-gray-700 rounded-md hover:bg-gray-50 disabled:opacity-50"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmitting}
+                  className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center"
+                >
+                  {isSubmitting ? <div className="w-5 h-5 border-2 border-white/50 border-t-white rounded-full animate-spin"></div> : 'Simpan'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      <ConfirmModal
+        isOpen={!!deleteConfirmId}
+        onClose={() => setDeleteConfirmId(null)}
+        onConfirm={() => deleteConfirmId && handleDelete(deleteConfirmId)}
+        title="Hapus Project"
+        message="Yakin ingin menghapus project ini secara permanen?"
+      />
+    </div>
+  );
+}
