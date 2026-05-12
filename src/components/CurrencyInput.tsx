@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
+import { NumericFormat } from 'react-number-format';
 
 export function CurrencyInput({
   value,
@@ -15,43 +16,27 @@ export function CurrencyInput({
   required?: boolean;
   max?: number;
 }) {
-  const [displayValue, setDisplayValue] = useState(
-    value ? value.toLocaleString('id-ID') : ""
-  );
-
-  useEffect(() => {
-    if (value === 0) {
-      if (displayValue !== "0" && displayValue !== "") {
-        // Only clear if it wasn't deliberately typed as 0
-        setDisplayValue("");
-      }
-    } else if (value) {
-      setDisplayValue(value.toLocaleString('id-ID'));
-    }
-  }, [value]);
-
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    let rawStr = e.target.value.replace(/\D/g, "");
-    if (!rawStr) {
-      setDisplayValue("");
-      onChange(0);
-      return;
-    }
-    let num = parseInt(rawStr, 10);
-    if (max !== undefined && num > max) num = max;
-    setDisplayValue(num.toLocaleString('id-ID'));
-    onChange(num);
-  };
-
   return (
-    <input
-      type="text"
-      inputMode="numeric"
-      value={displayValue}
-      onChange={handleChange}
+    <NumericFormat
+      value={value === 0 ? '' : value}
+      onValueChange={(values) => {
+        let num = values.floatValue || 0;
+        if (max !== undefined && num > max) num = max;
+        onChange(num);
+      }}
+      allowNegative={false}
+      thousandSeparator="."
+      decimalSeparator=","
       className={className}
       placeholder={placeholder}
       required={required}
+      isAllowed={(values) => {
+        if (max !== undefined && values.floatValue !== undefined) {
+          return values.floatValue <= max;
+        }
+        return true;
+      }}
     />
   );
 }
+
