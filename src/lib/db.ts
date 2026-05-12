@@ -1,10 +1,11 @@
-import { db } from './firebase';
+import { db, auth } from './firebase';
 import { collection, doc, getDocs, getDoc, addDoc, updateDoc, deleteDoc, query, where, orderBy, onSnapshot } from 'firebase/firestore';
 import imageCompression from 'browser-image-compression';
 
 export { db };
 
 export interface Project {
+  tenantId?: string;
   id?: string;
   customId?: string;
   name: string;
@@ -20,6 +21,7 @@ export interface Project {
 }
 
 export interface Report {
+  tenantId?: string;
   id?: string;
   projectId: string;
   projectName?: string;
@@ -35,6 +37,7 @@ export interface Report {
 }
 
 export interface Activity {
+  tenantId?: string;
   id?: string;
   reportId: string;
   projectId: string;
@@ -45,6 +48,7 @@ export interface Activity {
 }
 
 export interface Transaction {
+  tenantId?: string;
   id?: string;
   referenceNo?: string;
   projectId?: string;
@@ -64,6 +68,7 @@ export interface Transaction {
 }
 
 export interface Invoice {
+  tenantId?: string;
   id?: string;
   invoiceNo: string;
   projectId: string;
@@ -82,6 +87,7 @@ export interface Invoice {
 }
 
 export interface Payable {
+  tenantId?: string;
   id?: string;
   vendorName: string;
   projectId?: string;
@@ -96,11 +102,35 @@ export interface Payable {
 }
 
 export interface Budget {
+  tenantId?: string;
   id?: string;
   projectId: string;
   projectName?: string;
   category: string;
   plannedAmount: number;
+  createdAt: string;
+}
+
+export interface AuditLog {
+  tenantId?: string;
+  id?: string;
+  userId: string;
+  userName: string;
+  action: string;
+  entity: string;
+  entityId?: string;
+  details: string;
+  createdAt: string;
+}
+
+export interface Notification {
+  tenantId?: string;
+  id?: string;
+  userId: string;
+  title: string;
+  message: string;
+  isRead: boolean;
+  link?: string;
   createdAt: string;
 }
 
@@ -114,25 +144,39 @@ const fileToBase64 = (file: File): Promise<string> => {
   });
 };
 
-// Helper to upload image (Now converts to Base64 and stores in Firestore)
+// Helper to upload image (Now stores in Firebase Storage under tenant directory)
 export const uploadImage = async (file: File, path: string): Promise<string> => {
   try {
-    // Compression options: Max 300KB to ensure it fits well in Firestore document limits (1MB)
+    const user = auth.currentUser;
+    if (!user) throw new Error("User not authenticated");
+
+    const userDoc = await getDoc(doc(db, 'users', user.uid));
+    const tenantId = userDoc.data()?.tenantId;
+
+    if (!tenantId) throw new Error("Tenant ID not found");
+
+    // Compression options: aggressively compress for Base64 storage
     const options = {
-      maxSizeMB: 0.3,
-      maxWidthOrHeight: 1024,
-      useWebWorker: false
+      maxSizeMB: 0.1, // ~100KB max
+      maxWidthOrHeight: 800,
+      useWebWorker: true,
+      initialQuality: 0.7
     };
     
     // Compress the image
     const compressedFile = await imageCompression(file, options);
     
-    // Convert to Base64 string
-    const base64String = await fileToBase64(compressedFile);
-    
-    return base64String;
+    // Convert to Base64
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        resolve(reader.result as string);
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(compressedFile);
+    });
   } catch (error) {
-    console.error("Error compressing/converting image:", error);
+    console.error("Error compressing/uploading image:", error);
     throw error;
   }
 };
