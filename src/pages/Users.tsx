@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { collection, onSnapshot, query, updateDoc, doc, deleteDoc, setDoc } from 'firebase/firestore';
+import { collection, onSnapshot, query, updateDoc, doc, deleteDoc, setDoc, where } from 'firebase/firestore';
 import { createUserWithEmailAndPassword, signOut } from 'firebase/auth';
 import { db } from '../lib/db';
 import { secondaryAuth } from '../lib/firebase';
@@ -18,12 +18,13 @@ export function Users() {
   const [newName, setNewName] = useState('');
   const [newEmail, setNewEmail] = useState('');
   const [newPassword, setNewPassword] = useState('');
-  const [newRole, setNewRole] = useState<'admin'|'manager'|'pc'>('pc');
+  const [newRole, setNewRole] = useState<'owner'|'admin'|'manager'|'pc'>('pc');
+  const [createError, setCreateError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (profile?.role !== 'admin') return;
+    if ((profile?.role !== 'admin' && profile?.role !== 'owner') || !profile?.tenantId) return;
     
-    const unsub = onSnapshot(query(collection(db, 'users')), (snapshot) => {
+    const unsub = onSnapshot(query(collection(db, 'users'), where('tenantId', '==', profile.tenantId)), (snapshot) => {
       setUsers(snapshot.docs.map(doc => doc.data() as UserProfile));
     });
     return () => unsub();
@@ -58,6 +59,7 @@ export function Users() {
     if (!newEmail || !newPassword || !newName) return;
     
     setIsSubmitting(true);
+    setCreateError(null);
     try {
       // Create user within Firebase secondary auth
       const userCredential = await createUserWithEmailAndPassword(secondaryAuth, newEmail, newPassword);
@@ -69,7 +71,9 @@ export function Users() {
         name: newName,
         email: newEmail,
         role: newRole,
-        createdAt: new Date().toISOString()
+        tenantId: profile?.tenantId || '',
+        createdAt: new Date().toISOString(),
+        isOnboarded: true,
       });
 
       // Sign out from the secondary auth instance immediately
@@ -83,16 +87,16 @@ export function Users() {
     } catch (error: any) {
       console.error("Error creating user:", error);
       if (error.code === 'auth/email-already-in-use') {
-        alert('Gagal: Email ini sudah terdaftar di sistem. Silakan gunakan email lain.');
+        setCreateError('Gagal: Email ini sudah terdaftar di sistem. Silakan gunakan email lain.');
       } else {
-        alert(`Gagal membuat user: ${error.message}`);
+        setCreateError(`Gagal membuat user: ${error.message}`);
       }
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  if (profile?.role !== 'admin') {
+  if (profile?.role !== 'admin' && profile?.role !== 'owner') {
     return <div>Akses Ditolak. Halaman ini hanya untuk Admin.</div>;
   }
 
@@ -136,6 +140,7 @@ export function Users() {
                       disabled={user.uid === profile.uid}
                       className="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-md"
                     >
+                      <option value="owner">Owner</option>
                       <option value="admin">Admin</option>
                       <option value="manager">Manager</option>
                       <option value="pc">Project Coordinator</option>
@@ -198,6 +203,7 @@ export function Users() {
                   onChange={e => setNewRole(e.target.value as any)}
                   className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                 >
+                  <option value="owner">Owner</option>
                   <option value="admin">Admin</option>
                   <option value="manager">Manager</option>
                   <option value="pc">Project Coordinator</option>
@@ -228,6 +234,12 @@ export function Users() {
                   placeholder="Minimal 6 karakter"
                 />
               </div>
+
+              {createError && (
+                <div className="p-3 bg-red-50 text-red-700 text-sm rounded-md border border-red-100">
+                  {createError}
+                </div>
+              )}
 
               <div className="pt-4 flex justify-end gap-3 border-t border-gray-100">
                 <button

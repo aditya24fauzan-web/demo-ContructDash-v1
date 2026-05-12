@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { collection, onSnapshot, query, addDoc, updateDoc, deleteDoc, doc } from 'firebase/firestore';
+import { collection, onSnapshot, query, addDoc, updateDoc, deleteDoc, doc, where } from 'firebase/firestore';
 import { db, Project } from '../lib/db';
 import { useAuth } from '../lib/auth';
-import { Plus, Edit2, Trash2, X, Search, FileText } from 'lucide-react';
+import { Plus, Edit2, Trash2, X, Search, FileText, Download } from 'lucide-react';
 import { ConfirmModal } from '../components/ConfirmModal';
+import { exportToCSV } from '../lib/export';
+import { logActivity } from '../lib/audit';
 
 import { CurrencyInput } from '../components/CurrencyInput';
 
@@ -30,11 +32,12 @@ export function Projects() {
   });
 
   useEffect(() => {
-    const unsub = onSnapshot(query(collection(db, 'projects')), (snapshot) => {
+    if (!profile?.tenantId) return;
+    const unsub = onSnapshot(query(collection(db, 'projects'), where('tenantId', '==', profile.tenantId)), (snapshot) => {
       setProjects(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Project)));
     });
     return () => unsub();
-  }, []);
+  }, [profile?.tenantId]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -42,6 +45,7 @@ export function Projects() {
       setErrorMsg("Estimasi hari harus lebih dari 0");
       return;
     }
+    if (!profile) return;
 
     setIsSubmitting(true);
     setErrorMsg('');
@@ -50,13 +54,16 @@ export function Projects() {
         await updateDoc(doc(db, 'projects', editingProject.id), {
           ...formData,
         });
+        await logActivity(profile.tenantId, profile.uid, profile.name, 'UPDATE', 'Project', `Proyek ${formData.name} diperbarui`, editingProject.id);
       } else {
-        await addDoc(collection(db, 'projects'), {
+        const ref = await addDoc(collection(db, 'projects'), {
           ...formData,
+          tenantId: profile?.tenantId || '',
           currentDay: 0,
           progress: 0,
           createdAt: new Date().toISOString()
         });
+        await logActivity(profile.tenantId, profile.uid, profile.name, 'CREATE', 'Project', `Proyek baru bernama ${formData.name} dibuat`, ref.id);
       }
       setIsModalOpen(false);
       resetForm();
@@ -69,8 +76,11 @@ export function Projects() {
   };
 
   const handleDelete = async (id: string) => {
+    if(!profile) return;
     try {
+      const proj = projects.find(p => p.id === id);
       await deleteDoc(doc(db, 'projects', id));
+      await logActivity(profile.tenantId, profile.uid, profile.name, 'DELETE', 'Project', `Proyek ${proj?.name || ''} dihapus`, id);
       setDeleteConfirmId(null);
     } catch (error) {
       console.error("Error deleting project:", error);
@@ -115,79 +125,104 @@ export function Projects() {
            project.location.toLowerCase().includes(query);
   });
 
+  const handleExport = () => {
+    const exportData = filteredProjects.map(p => ({
+      'ID Proyek': p.customId || p.id,
+      'Nama Proyek': p.name,
+      'Lokasi': p.location,
+      'Status': p.status,
+      'Progress (%)': p.progress.toFixed(1),
+      'Mulai': new Date(p.startDate).toLocaleDateString('id-ID'),
+      'Tenggat Waktu': new Date(p.deadline).toLocaleDateString('id-ID'),
+      'Estimasi Hari': p.estimatedDays,
+      'Nilai Kontrak (Rp)': p.contractValue || 0
+    }));
+    exportToCSV(exportData, `Data_Proyek_${new Date().toISOString().split('T')[0]}`);
+  };
+
   return (
     <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-        <h1 className="text-2xl font-bold text-gray-900">Projects</h1>
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-2">
+        <h1 className="text-3xl font-bold tracking-tight text-gray-900">Proyek</h1>
         <div className="flex w-full sm:w-auto items-center gap-3">
           <div className="relative w-full sm:w-64">
             <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-              <Search className="h-5 w-5 text-gray-400" />
+              <Search className="h-4 w-4 text-gray-400" />
             </div>
             <input
               type="text"
               placeholder="Cari project atau lokasi..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-md leading-5 bg-white placeholder-gray-500 focus:outline-none focus:placeholder-gray-400 focus:ring-1 focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+              className="block w-full pl-9 pr-3 py-2.5 border border-gray-200 rounded-xl leading-5 bg-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 sm:text-sm transition-all"
             />
           </div>
+          
+          <button
+            onClick={handleExport}
+            className="bg-white text-gray-700 px-3 py-2.5 rounded-xl flex items-center gap-2 border border-gray-200 hover:bg-gray-50 transition-all font-medium whitespace-nowrap"
+            title="Export ke CSV"
+          >
+            <Download size={18} />
+             <span className="hidden sm:inline">Export</span>
+          </button>
+
           {profile?.role === 'admin' && (
             <button
               onClick={() => { resetForm(); setIsModalOpen(true); }}
-              className="bg-blue-600 shrink-0 text-white px-4 py-2 rounded-md flex items-center gap-2 hover:bg-blue-700"
+              className="bg-blue-600 shrink-0 text-white px-4 py-2.5 rounded-xl flex items-center gap-2 hover:bg-blue-700 shadow-sm shadow-blue-500/20 transition-all font-medium whitespace-nowrap"
             >
-              <Plus size={20} />
-              <span className="hidden sm:inline">Tambah Project</span>
+              <Plus size={18} />
+              <span className="hidden sm:inline">Tambah Proyek</span>
             </button>
           )}
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {filteredProjects.map(project => (
-          <div key={project.id} className="bg-white rounded-xl shadow-sm border border-gray-100 p-5">
-            <div className="flex justify-between items-start mb-4">
+          <div key={project.id} className="bg-white rounded-2xl shadow-sm hover:shadow-md transition-shadow border border-gray-100 p-6 flex flex-col">
+            <div className="flex justify-between items-start mb-5">
               <div>
-                <h3 className="font-bold text-lg text-gray-900">{project.name}</h3>
-                {project.customId && <p className="text-xs font-semibold text-blue-600 mb-1">{project.customId}</p>}
+                <h3 className="font-bold text-lg text-gray-900 mb-1 leading-tight">{project.name}</h3>
+                {project.customId && <p className="text-xs font-semibold text-blue-600 mb-1.5 px-2 py-0.5 bg-blue-50 inline-block rounded-md">{project.customId}</p>}
                 <p className="text-sm text-gray-500">{project.location}</p>
               </div>
-              <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${
-                project.status === 'active' ? 'bg-blue-100 text-blue-800' :
-                project.status === 'completed' ? 'bg-green-100 text-green-800' :
-                'bg-red-100 text-red-800'
+              <span className={`px-2.5 py-1 rounded-md border text-[10px] uppercase font-bold tracking-wider ${
+                project.status === 'active' ? 'bg-blue-50 text-blue-700 border-blue-200/50' :
+                project.status === 'completed' ? 'bg-emerald-50 text-emerald-700 border-emerald-200/50' :
+                'bg-red-50 text-red-700 border-red-200/50'
               }`}>
-                {project.status.toUpperCase()}
+                {project.status}
               </span>
             </div>
 
-            <div className="space-y-2 mb-4">
-              <div className="flex justify-between text-sm">
-                <span className="text-gray-500">Progress</span>
-                <span className="font-medium">{project.progress.toFixed(1)}%</span>
+            <div className="space-y-2 mb-6">
+              <div className="flex justify-between text-sm items-center">
+                <span className="text-gray-500 font-medium">Progress</span>
+                <span className="font-bold text-gray-900">{project.progress.toFixed(1)}%</span>
               </div>
-              <div className="w-full bg-gray-200 rounded-full h-2">
+              <div className="w-full bg-gray-100 rounded-full h-2 overflow-hidden">
                 <div 
-                  className="bg-blue-600 h-2 rounded-full" 
+                  className={`h-2 rounded-full transition-all duration-1000 ease-out ${project.progress < 30 ? 'bg-red-500' : project.progress < 70 ? 'bg-amber-400' : 'bg-emerald-500'}`}
                   style={{ width: `${project.progress}%` }}
                 ></div>
               </div>
-              <p className="text-xs text-gray-500 text-right">
-                Hari {project.currentDay} / {project.estimatedDays}
+              <p className="text-xs font-medium text-gray-400 text-right">
+                Hari {project.currentDay} dari {project.estimatedDays}
               </p>
             </div>
 
-            <div className="text-sm text-gray-600 space-y-1 mb-4">
-              <p>Mulai: {new Date(project.startDate).toLocaleDateString('id-ID')}</p>
-              <p>Deadline: {new Date(project.deadline).toLocaleDateString('id-ID')}</p>
-              {project.contractValue ? <p className="font-semibold text-gray-800">Nilai Kontrak: Rp {project.contractValue.toLocaleString('id-ID')}</p> : null}
+            <div className="text-sm text-gray-500 space-y-1.5 mb-6 flex-1">
+              <p className="flex justify-between"><span>Mulai:</span> <strong className="text-gray-900 font-medium">{new Date(project.startDate).toLocaleDateString('id-ID', {day: 'numeric', month: 'short', year: 'numeric'})}</strong></p>
+              <p className="flex justify-between"><span>Tenggat:</span> <strong className="text-gray-900 font-medium">{new Date(project.deadline).toLocaleDateString('id-ID', {day: 'numeric', month: 'short', year: 'numeric'})}</strong></p>
+              {project.contractValue ? <p className="flex justify-between mt-2 pt-2 border-t border-gray-50"><span>Nilai Kontrak:</span> <strong className="text-gray-900">Rp {project.contractValue.toLocaleString('id-ID')}</strong></p> : null}
             </div>
 
-            <div className="flex gap-2 pt-4 border-t border-gray-100 mt-4">
+            <div className="flex gap-2 pt-4 border-t border-gray-100 mt-auto">
               <Link
                 to={`/projects/${project.id}`}
-                className={`${canEdit ? 'flex-1' : 'w-full'} flex items-center justify-center gap-1 px-3 py-1.5 text-sm font-medium text-emerald-600 bg-emerald-50 rounded-md hover:bg-emerald-100`}
+                className={`${canEdit ? 'flex-1' : 'w-full'} flex items-center justify-center gap-1.5 px-3 py-2 text-sm font-semibold text-gray-700 bg-white border border-gray-200 rounded-xl hover:bg-gray-50 transition-colors shadow-sm`}
               >
                 <FileText size={16} /> Detail
               </Link>
@@ -196,14 +231,14 @@ export function Projects() {
                 <>
                   <button
                     onClick={() => openEditModal(project)}
-                    className="flex-1 flex items-center justify-center gap-1 px-3 py-1.5 text-sm font-medium text-blue-600 bg-blue-50 rounded-md hover:bg-blue-100"
+                    className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 text-sm font-semibold text-blue-700 bg-blue-50 border border-blue-100 rounded-xl hover:bg-blue-100 transition-colors"
                   >
                     <Edit2 size={16} /> Edit
                   </button>
                   {profile?.role === 'admin' && (
                     <button
                       onClick={() => project.id && setDeleteConfirmId(project.id)}
-                      className="flex-1 flex items-center justify-center gap-1 px-3 py-1.5 text-sm font-medium text-red-600 bg-red-50 rounded-md hover:bg-red-100"
+                      className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 text-sm font-semibold text-rose-700 bg-rose-50 border border-rose-100 rounded-xl hover:bg-rose-100 transition-colors"
                     >
                       <Trash2 size={16} /> Hapus
                     </button>
@@ -214,8 +249,12 @@ export function Projects() {
           </div>
         ))}
         {filteredProjects.length === 0 && (
-          <div className="col-span-full py-12 text-center text-gray-500 bg-white rounded-xl border border-gray-100 border-dashed">
-            <p>Tidak ada project yang ditemukan.</p>
+          <div className="col-span-full py-16 px-4 text-center text-gray-500 bg-white rounded-2xl border border-gray-100 border-dashed flex flex-col items-center justify-center">
+             <div className="w-16 h-16 bg-gray-50 rounded-full flex items-center justify-center mb-4">
+                <Search size={32} className="text-gray-400" />
+             </div>
+            <p className="text-gray-900 font-medium mb-1">Tidak ada proyek yang ditemukan</p>
+            <p className="text-sm">Silakan ubah kata kunci pencarian Anda.</p>
           </div>
         )}
       </div>

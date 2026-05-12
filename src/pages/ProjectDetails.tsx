@@ -6,10 +6,13 @@ import { ArrowLeft, MapPin, Calendar, Clock, Target, AlertTriangle, FileText, Wa
 import { clsx } from 'clsx';
 import { format, parseISO } from 'date-fns';
 import { id as localeId } from 'date-fns/locale';
+import { useAuth } from '../lib/auth';
 
 export function ProjectDetails() {
   const { id } = useParams<{ id: string }>();
   const [activeTab, setActiveTab] = useState<'laporan' | 'keuangan'>('laporan');
+  
+  const { profile } = useAuth();
   
   const [project, setProject] = useState<Project | null>(null);
   const [reports, setReports] = useState<(Report & { activities: Activity[] })[]>([]);
@@ -18,21 +21,30 @@ export function ProjectDetails() {
 
   useEffect(() => {
     async function fetchData() {
-      if (!id) return;
+      if (!id || !profile?.tenantId) return;
       try {
         // Fetch Project
         const projectSnap = await getDoc(doc(db, 'projects', id));
         if (projectSnap.exists()) {
-          setProject({ id: projectSnap.id, ...projectSnap.data() } as Project);
+          const projData = projectSnap.data() as Project;
+          if (projData.tenantId !== profile.tenantId) {
+             setProject(null);
+             setLoading(false);
+             return;
+          }
+          setProject({ id: projectSnap.id, ...projData });
+        } else {
+           setLoading(false);
+           return;
         }
 
         // Fetch Reports
-        const reportsQuery = query(collection(db, 'reports'), where('projectId', '==', id), orderBy('date', 'desc'));
+        const reportsQuery = query(collection(db, 'reports'), where('projectId', '==', id), where('tenantId', '==', profile.tenantId), orderBy('date', 'desc'));
         const reportsSnap = await getDocs(reportsQuery);
         const fetchedReports = reportsSnap.docs.map(doc => ({ id: doc.id, ...doc.data() } as Report));
 
         // Fetch Activities
-        const activitiesQuery = query(collection(db, 'activities'), where('projectId', '==', id), orderBy('dayNumber', 'asc'));
+        const activitiesQuery = query(collection(db, 'activities'), where('projectId', '==', id), where('tenantId', '==', profile.tenantId), orderBy('dayNumber', 'asc'));
         const activitiesSnap = await getDocs(activitiesQuery);
         const allActivities = activitiesSnap.docs.map(doc => ({ id: doc.id, ...doc.data() } as Activity));
 
@@ -43,7 +55,7 @@ export function ProjectDetails() {
         setReports(reportsWithActivities);
 
         // Fetch Transactions specifically for this project
-        const txQuery = query(collection(db, 'transactions'), where('projectId', '==', id), orderBy('date', 'desc'));
+        const txQuery = query(collection(db, 'transactions'), where('projectId', '==', id), where('tenantId', '==', profile.tenantId), orderBy('date', 'desc'));
         const txSnap = await getDocs(txQuery);
         const fetchedTx = txSnap.docs.map(doc => ({ id: doc.id, ...doc.data() } as Transaction));
         setTransactions(fetchedTx);
@@ -55,7 +67,7 @@ export function ProjectDetails() {
       }
     }
     fetchData();
-  }, [id]);
+  }, [id, profile?.tenantId]);
 
   const formatRupiah = (num: number) => {
     return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(num);

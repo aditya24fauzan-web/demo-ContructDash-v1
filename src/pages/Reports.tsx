@@ -6,9 +6,14 @@ import { Plus, X, Check, XCircle, Download, Image as ImageIcon, FileSpreadsheet,
 import { ConfirmModal } from '../components/ConfirmModal';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import { exportToCSV as exportDataToCSV } from '../lib/export';
+import { logActivity } from '../lib/audit';
+import { sendNotification } from '../lib/notification';
+import { useTenant } from '../lib/tenant';
 
 export function Reports() {
   const { profile } = useAuth();
+  const { tenant } = useTenant();
   const [reports, setReports] = useState<(Report & { project?: Project })[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -31,8 +36,10 @@ export function Reports() {
   const [activities, setActivities] = useState([{ dayNumber: 1, description: '' }]);
 
   useEffect(() => {
+    if (!profile?.tenantId) return;
+
     const unsubProjects = onSnapshot(
-      query(collection(db, 'projects')), 
+      query(collection(db, 'projects'), where('tenantId', '==', profile.tenantId)), 
       (snapshot) => {
         setProjects(snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Project)));
       },
@@ -40,7 +47,7 @@ export function Reports() {
     );
 
     const unsubReports = onSnapshot(
-      query(collection(db, 'reports'), orderBy('createdAt', 'desc')), 
+      query(collection(db, 'reports'), where('tenantId', '==', profile.tenantId), orderBy('createdAt', 'desc')), 
       (snapshot) => {
         setReports(snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Report)));
       },
@@ -51,7 +58,7 @@ export function Reports() {
       unsubProjects();
       unsubReports();
     };
-  }, []);
+  }, [profile?.tenantId]);
 
   const reportsWithProjects = reports.map(r => ({
     ...r,
@@ -100,6 +107,9 @@ export function Reports() {
       
       let reportId = '';
       
+      const selectedProject = projects.find(p => p.id === projectId);
+      const projectName = selectedProject?.name || 'Unknown Project';
+
       if (!existingSnap.empty) {
         // Upsert: Tambahkan ke laporan yang sudah ada
         const existingDoc = existingSnap.docs[0];
@@ -116,13 +126,15 @@ export function Reports() {
         if (Object.keys(updates).length > 0) {
           await updateDoc(doc(db, 'reports', reportId), updates);
         }
+        await logActivity(profile.tenantId, profile.uid, profile.name, 'UPDATE', 'Report', `Grup Laporan untuk proyek ${projectName} diperbarui`, reportId);
+
       } else {
         // Buat laporan baru
-        const selectedProject = projects.find(p => p.id === projectId);
         const reportRef = await addDoc(collection(db, 'reports'), {
           projectId,
           projectName: selectedProject?.name || 'Unknown Project',
           projectCustomId: selectedProject?.customId || null,
+          tenantId: profile?.tenantId || '',
           userId: profile.uid,
           date,
           location,
@@ -133,6 +145,22 @@ export function Reports() {
           createdAt: new Date().toISOString()
         });
         reportId = reportRef.id;
+        await logActivity(profile.tenantId, profile.uid, profile.name, 'CREATE', 'Report', `Laporan baru untuk proyek ${projectName} dibuat`, reportId);
+
+        // Notif to Admin/Manager if PC
+        if (profile.role === 'pc') {
+          const qRole = query(collection(db, 'users'), where('tenantId', '==', profile.tenantId));
+          const usersSnap = await getDocs(qRole);
+          const managers = usersSnap.docs.filter(d => ['admin', 'manager'].includes(d.data().role));
+          for (const m of managers) {
+            await sendNotification(
+              profile.tenantId, 
+              m.id, 
+              "Laporan Baru Menunggu", 
+              `Project Coordinator ${profile.name} telah mengirimkan laporan baru untuk proyek ${projectName}.`
+            );
+          }
+        }
       }
 
       // Tambahkan aktivitas baru
@@ -143,6 +171,7 @@ export function Reports() {
           await addDoc(collection(db, 'activities'), {
             reportId: reportId,
             projectId,
+            tenantId: profile?.tenantId || '',
             dayNumber: numDay,
             date,
             description: act.description,
@@ -195,9 +224,20 @@ export function Reports() {
   };
 
   const handleApproval = async (report: Report, status: 'approved' | 'rejected') => {
-    if (!report.id) return;
+    if (!report.id || !profile) return;
     try {
       await updateDoc(doc(db, 'reports', report.id), { status });
+      await logActivity(profile.tenantId, profile.uid, profile.name, 'APPROVE', 'Report', `Laporan proyek ${report.projectName || ''} berstatus ${status}`, report.id);
+
+      // Notifikasi ke PC/pengirim:
+      if (report.userId) {
+        await sendNotification(
+          profile.tenantId,
+          report.userId,
+          `Laporan Anda ${status === 'approved' ? 'Disetujui' : 'Ditolak'}`,
+          `Laporan untuk proyek ${report.projectName} pada ${report.date} telah ${status === 'approved' ? 'disetujui' : 'ditolak'} oleh Manager.`
+        );
+      }
 
       if (status === 'approved') {
         const project = projects.find(p => p.id === report.projectId);
@@ -226,6 +266,7 @@ export function Reports() {
   };
 
   const handleDeleteReport = async (reportId: string) => {
+    if(!profile) return;
     try {
       // 1. Delete the report
       await deleteDoc(doc(db, 'reports', reportId));
@@ -237,6 +278,8 @@ export function Reports() {
       const deletePromises = snapshot.docs.map(d => deleteDoc(doc(db, 'activities', d.id)));
       await Promise.all(deletePromises);
       
+      await logActivity(profile.tenantId, profile.uid, profile.name, 'DELETE', 'Report', `Laporan telah dihapus`, reportId);
+      
       setDeleteConfirmId(null);
     } catch (error) {
       console.error("Error deleting report:", error);
@@ -247,37 +290,66 @@ export function Reports() {
   const exportToPDF = async (report: Report & { project?: Project }) => {
     const doc = new jsPDF();
     
-    doc.setFontSize(18);
-    doc.text('Laporan Harian Proyek', 14, 22);
+    // Add Company Header
+    if (tenant) {
+      doc.setFontSize(16);
+      doc.text(tenant.name || 'ConstructDash', 14, 20);
+      doc.setFontSize(10);
+      doc.text(tenant.address || 'Alamat Belum Diatur', 14, 26);
+      doc.text(`Tel: ${tenant.phone || '-'} | Email: ${tenant.email || '-'}`, 14, 32);
+      
+      // Divider
+      doc.setDrawColor(200);
+      doc.line(14, 35, 196, 35);
+    }
     
+    doc.setFontSize(14);
+    doc.text('Laporan Harian Proyek', 14, tenant ? 45 : 22);
+    
+    const startYParams = tenant ? 55 : 32;
     doc.setFontSize(11);
     const projectName = report.project?.name || report.projectName || 'Unknown';
     const customId = report.project?.customId || report.projectCustomId || '';
-    doc.text(`Project: ${projectName} ${customId ? `(${customId})` : ''}`, 14, 32);
-    doc.text(`Tanggal: ${new Date(report.date).toLocaleDateString('id-ID')}`, 14, 38);
-    doc.text(`Lokasi: ${report.location}`, 14, 44);
-    doc.text(`Pekerja: ${report.workerCount || 0} Orang`, 14, 50);
-    doc.text(`Status: ${report.status.toUpperCase()}`, 14, 56);
-    doc.text(`Kendala: ${report.issues || '-'}`, 14, 62);
+    doc.text(`Project: ${projectName} ${customId ? `(${customId})` : ''}`, 14, startYParams);
+    doc.text(`Tanggal: ${new Date(report.date).toLocaleDateString('id-ID')}`, 14, startYParams + 6);
+    doc.text(`Lokasi: ${report.location}`, 14, startYParams + 12);
+    doc.text(`Pekerja: ${report.workerCount || 0} Orang`, 14, startYParams + 18);
+    doc.text(`Status: ${report.status.toUpperCase()}`, 14, startYParams + 24);
+    doc.text(`Kendala: ${report.issues || '-'}`, 14, startYParams + 30);
 
-    let currentY = 68;
+    let currentY = startYParams + 36;
 
     // Add image to PDF if exists
-    if (report.photoUrl && report.photoUrl.startsWith('data:image')) {
+    if (report.photoUrl) {
       try {
-        doc.text(`Dokumentasi:`, 14, currentY);
-        currentY += 5;
-        // Add image (x, y, width, height)
-        doc.addImage(report.photoUrl, 'JPEG', 14, currentY, 80, 60);
-        currentY += 65;
+        let imageData = report.photoUrl;
+        
+        // If it's a URL (Firebase Storage), fetch it and convert to base64
+        if (report.photoUrl.startsWith('http')) {
+          const response = await fetch(report.photoUrl);
+          const blob = await response.blob();
+          imageData = await new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve(reader.result as string);
+            reader.readAsDataURL(blob);
+          });
+        }
+        
+        if (imageData && imageData.startsWith('data:image')) {
+          doc.text(`Dokumentasi:`, 14, currentY);
+          currentY += 5;
+          // Add image (x, y, width, height)
+          doc.addImage(imageData, 'JPEG', 14, currentY, 80, 60);
+          currentY += 65;
+        } else {
+          doc.text(`Link Foto Dokumentasi: Tersedia (Lihat di sistem)`, 14, currentY);
+          currentY += 10;
+        }
       } catch (e) {
         console.error("Failed to add image to PDF", e);
         doc.text(`Link Foto Dokumentasi: Tersedia (Lihat di sistem)`, 14, currentY);
         currentY += 10;
       }
-    } else if (report.photoUrl) {
-      doc.text(`Link Foto Dokumentasi: Tersedia (Lihat di sistem)`, 14, currentY);
-      currentY += 10;
     }
 
     // Fetch activities for this report
@@ -352,23 +424,50 @@ export function Reports() {
     document.body.removeChild(link);
   };
 
+  const handleExportAll = () => {
+    const exportData = filteredReports.map(r => {
+      const projectName = r.project?.name || r.projectName || 'Unknown';
+      const customId = r.project?.customId || r.projectCustomId || '';
+      return {
+        'ID Proyek': customId,
+        'Nama Proyek': projectName,
+        'Tanggal Laporan': r.date,
+        'Lokasi': r.location,
+        'Status': r.status.toUpperCase(),
+        'Jumlah Pekerja': r.workerCount || 0,
+        'Kendala': r.issues || '-'
+      };
+    });
+    exportDataToCSV(exportData, `Daftar_Laporan_${new Date().toISOString().split('T')[0]}`);
+  };
+
   return (
     <div className="space-y-6">
       {profile?.role !== 'pc' && (
         <>
-          <div className="flex justify-between items-center mb-2">
-            <h1 className="text-2xl font-bold text-gray-900">Laporan Harian</h1>
-            <button
-              onClick={() => setIsModalOpen(true)}
-              className="bg-blue-600 text-white px-4 py-2 rounded-md flex items-center gap-2 hover:bg-blue-700"
-            >
-              <Plus size={20} />
-              <span className="hidden sm:inline">Buat Laporan</span>
-            </button>
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-4">
+            <h1 className="text-3xl font-bold tracking-tight text-gray-900">Laporan Harian</h1>
+            <div className="flex w-full sm:w-auto items-center gap-3">
+              <button
+                onClick={handleExportAll}
+                className="bg-white text-gray-700 px-3 py-2.5 rounded-xl flex items-center gap-2 border border-gray-200 hover:bg-gray-50 transition-all font-medium whitespace-nowrap"
+                title="Export Semua Data Laporan"
+              >
+                <FileSpreadsheet size={18} className="text-green-600" />
+                <span className="hidden sm:inline">Export Semua</span>
+              </button>
+              <button
+                onClick={() => setIsModalOpen(true)}
+                className="bg-blue-600 shrink-0 text-white px-4 py-2.5 rounded-xl flex items-center gap-2 hover:bg-blue-700 shadow-sm shadow-blue-500/20 transition-all font-medium"
+              >
+                <Plus size={18} />
+                <span className="hidden sm:inline">Buat Laporan</span>
+              </button>
+            </div>
           </div>
 
           {/* Filters */}
-          <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 flex flex-col md:flex-row gap-4">
+          <div className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100 flex flex-col md:flex-row gap-4 mb-6">
             <div className="flex-1">
               <label className="block text-sm font-medium text-gray-700 mb-1">Status</label>
               <select
@@ -403,17 +502,17 @@ export function Reports() {
             <div className="flex items-end">
                <button
                  onClick={() => { setFilterStatus('all'); setFilterStartDate(''); setFilterEndDate(''); }}
-                 className="px-4 py-2 text-sm font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-md transition-colors w-full md:w-auto"
+                 className="px-4 py-2.5 text-sm font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-xl transition-colors w-full md:w-auto"
                >
-                 Reset
+                 Reset Filter
                </button>
             </div>
           </div>
 
-          <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
             <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-gray-200">
-            <thead className="bg-gray-50">
+              <table className="min-w-full divide-y divide-gray-100">
+            <thead className="bg-gray-50/50">
               <tr>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Tanggal</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Project</th>
@@ -694,7 +793,6 @@ export function Reports() {
                           type="file" 
                           className="sr-only" 
                           accept="image/*"
-                          capture="environment"
                           onChange={e => {
                             if (e.target.files && e.target.files[0]) {
                               setPhoto(e.target.files[0]);
