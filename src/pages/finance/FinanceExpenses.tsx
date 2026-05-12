@@ -1,12 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { collection, onSnapshot, query, addDoc, deleteDoc, doc, orderBy, updateDoc } from 'firebase/firestore';
-import { db, Transaction, Payable, Project } from '../../lib/db';
+import { collection, onSnapshot, query, addDoc, deleteDoc, doc, orderBy, updateDoc, where } from 'firebase/firestore';
+import { db, Transaction, Payable, Project, uploadImage } from '../../lib/db';
 import { useAuth } from '../../lib/auth';
 import { Plus, Trash2, Search, FileText, CheckCircle, Activity, CreditCard } from 'lucide-react';
 import clsx from 'clsx';
 import { format, parseISO } from 'date-fns';
 import { ConfirmModal } from '../../components/ConfirmModal';
 import { CurrencyInput } from '../../components/CurrencyInput';
+import { ImageUpload } from '../../components/ImageUpload';
 
 export function FinanceExpenses() {
   const { profile } = useAuth();
@@ -20,29 +21,37 @@ export function FinanceExpenses() {
   
   const [deleteId, setDeleteId] = useState<{id: string, type: 'expense' | 'payable'} | null>(null);
   const [paymentModalData, setPaymentModalData] = useState<{ payableId: string, maxAmount: number, payAmount: number, date: string } | null>(null);
+  const [uploading, setUploading] = useState(false);
 
   const [expenseData, setExpenseData] = useState<Partial<Transaction>>({
+    projectId: '',
     date: new Date().toISOString().split('T')[0],
-    amount: 0, category: 'MATERIAL', paymentMethod: 'TRANSFER', status: 'PENDING'
+    amount: 0, category: 'MATERIAL', paymentMethod: 'TRANSFER', status: 'PENDING',
+    description: '',
+    proofUrl: ''
   });
   
   const [payableData, setPayableData] = useState<Partial<Payable>>({
+    projectId: '',
+    vendorName: '',
+    description: '',
     dueDate: new Date().toISOString().split('T')[0],
     amount: 0, status: 'UNPAID'
   });
 
   useEffect(() => {
-    const unsubTx = onSnapshot(query(collection(db, 'transactions'), orderBy('date', 'desc')), snap => {
+    if (!profile?.tenantId) return;
+    const unsubTx = onSnapshot(query(collection(db, 'transactions'), where('tenantId', '==', profile.tenantId), orderBy('date', 'desc')), snap => {
       setExpenses(snap.docs.map(d => ({ id: d.id, ...d.data() } as Transaction)).filter(t => t.type === 'EXPENSE'));
     });
-    const unsubPay = onSnapshot(query(collection(db, 'payables'), orderBy('dueDate', 'asc')), snap => {
+    const unsubPay = onSnapshot(query(collection(db, 'payables'), where('tenantId', '==', profile.tenantId), orderBy('dueDate', 'asc')), snap => {
       setPayables(snap.docs.map(d => ({ id: d.id, ...d.data() } as Payable)));
     });
-    const unsubProj = onSnapshot(query(collection(db, 'projects'), orderBy('createdAt', 'desc')), snap => {
+    const unsubProj = onSnapshot(query(collection(db, 'projects'), where('tenantId', '==', profile.tenantId), orderBy('createdAt', 'desc')), snap => {
       setProjects(snap.docs.map(d => ({ id: d.id, ...d.data() } as Project)));
     });
     return () => { unsubTx(); unsubPay(); unsubProj(); };
-  }, []);
+  }, [profile?.tenantId]);
 
   const formatRupiah = (num: number) => new Intl.NumberFormat('id-ID').format(num);
 
@@ -65,9 +74,9 @@ export function FinanceExpenses() {
         createdBy: profile?.uid || 'unknown',
         createdAt: new Date().toISOString()
       };
-      await addDoc(collection(db, 'transactions'), data);
+      await addDoc(collection(db, 'transactions'), { ...data, tenantId: profile?.tenantId || '' });
       setShowExpenseModal(false);
-      setExpenseData({ date: new Date().toISOString().split('T')[0], amount: 0, category: 'MATERIAL', paymentMethod: 'TRANSFER', status: 'PENDING' });
+      setExpenseData({ projectId: '', date: new Date().toISOString().split('T')[0], amount: 0, category: 'MATERIAL', paymentMethod: 'TRANSFER', status: 'PENDING', description: '', proofUrl: '' });
     } catch (error) {
       console.error(error); alert('Gagal menyimpan pengeluaran');
     }
@@ -89,9 +98,9 @@ export function FinanceExpenses() {
         createdBy: profile?.uid || 'unknown',
         createdAt: new Date().toISOString()
       };
-      await addDoc(collection(db, 'payables'), data);
+      await addDoc(collection(db, 'payables'), { ...data, tenantId: profile?.tenantId || '' });
       setShowPayableModal(false);
-      setPayableData({ dueDate: new Date().toISOString().split('T')[0], amount: 0, status: 'UNPAID' });
+      setPayableData({ projectId: '', vendorName: '', description: '', dueDate: new Date().toISOString().split('T')[0], amount: 0, status: 'UNPAID' });
     } catch (error) {
       console.error(error); alert('Gagal menyimpan data hutang vendor');
     }
@@ -127,7 +136,7 @@ export function FinanceExpenses() {
         createdBy: profile?.uid || 'unknown',
         createdAt: new Date().toISOString()
       };
-      await addDoc(collection(db, 'transactions'), txData);
+      await addDoc(collection(db, 'transactions'), { ...txData, tenantId: profile?.tenantId || '' });
       
       setPaymentModalData(null);
     } catch (error) {
@@ -323,14 +332,22 @@ export function FinanceExpenses() {
                     <label className="block text-sm font-medium text-gray-700 mb-1">Nominal Keluar (Rp)</label>
                     <CurrencyInput required value={expenseData.amount || 0} onChange={val => setExpenseData({...expenseData, amount: val})} className="w-full border p-2 rounded-lg text-sm" />
                  </div>
-                 <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Bukti Nota (URL)</label>
-                    <input type="url" value={expenseData.proofUrl || ''} onChange={e => setExpenseData({...expenseData, proofUrl: e.target.value})} className="w-full border p-2 rounded-lg text-sm" placeholder="Link struk..." />
+                 <div className="col-span-2">
+                    <ImageUpload 
+                      label="Bukti Nota (Opsional)"
+                      path="proofs"
+                      value={expenseData.proofUrl}
+                      onUpload={(url) => setExpenseData({ ...expenseData, proofUrl: url })}
+                      isUploading={uploading}
+                      onUploadingChange={setUploading}
+                    />
                  </div>
                </div>
                <div className="flex justify-end gap-3 mt-6 pt-4 border-t border-gray-100">
-                <button type="button" onClick={() => setShowExpenseModal(false)} className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg text-sm font-medium">Batal</button>
-                <button type="submit" className="px-4 py-2 bg-rose-600 text-white rounded-lg text-sm font-medium hover:bg-rose-700 shadow-sm">Simpan</button>
+                <button type="button" onClick={() => setShowExpenseModal(false)} className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg text-sm font-medium" disabled={uploading}>Batal</button>
+                <button type="submit" disabled={uploading} className="px-4 py-2 bg-rose-600 text-white rounded-lg text-sm font-medium hover:bg-rose-700 shadow-sm disabled:opacity-50">
+                  {uploading ? 'Memproses...' : 'Simpan'}
+                </button>
               </div>
             </form>
             </div>

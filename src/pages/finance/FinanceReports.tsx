@@ -1,29 +1,44 @@
 import React, { useState, useEffect } from 'react';
-import { collection, onSnapshot, query, orderBy } from 'firebase/firestore';
+import { collection, onSnapshot, query, orderBy, deleteDoc, doc, where } from 'firebase/firestore';
 import { db, Transaction, Project } from '../../lib/db';
-import { Download, Filter, FileText } from 'lucide-react';
+import { useAuth } from '../../lib/auth';
+import { Download, Filter, FileText, Trash2 } from 'lucide-react';
 import clsx from 'clsx';
 import { format, parseISO } from 'date-fns';
 import { id } from 'date-fns/locale';
+import { ConfirmModal } from '../../components/ConfirmModal';
 
 export function FinanceReports() {
+  const { profile } = useAuth();
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   
   const [selectedReport, setSelectedReport] = useState<'laba-rugi' | 'cashflow' | 'pengeluaran'>('laba-rugi');
   const [selectedProjectId, setSelectedProjectId] = useState<string>('all');
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
   useEffect(() => {
-    const unsubTx = onSnapshot(query(collection(db, 'transactions'), orderBy('date', 'desc')), snap => {
+    if (!profile?.tenantId) return;
+    const unsubTx = onSnapshot(query(collection(db, 'transactions'), where('tenantId', '==', profile.tenantId), orderBy('date', 'desc')), snap => {
       setTransactions(snap.docs.map(d => ({ id: d.id, ...d.data() } as Transaction)).filter(t => t.status === 'COMPLETED'));
     });
-    const unsubProj = onSnapshot(query(collection(db, 'projects'), orderBy('createdAt', 'desc')), snap => {
+    const unsubProj = onSnapshot(query(collection(db, 'projects'), where('tenantId', '==', profile.tenantId), orderBy('createdAt', 'desc')), snap => {
       setProjects(snap.docs.map(d => ({ id: d.id, ...d.data() } as Project)));
     });
     return () => { unsubTx(); unsubProj(); };
-  }, []);
+  }, [profile?.tenantId]);
 
   const formatRupiah = (num: number) => new Intl.NumberFormat('id-ID').format(num);
+
+  const handleDelete = async () => {
+    if(!deleteConfirmId) return;
+    try {
+      await deleteDoc(doc(db, 'transactions', deleteConfirmId));
+      setDeleteConfirmId(null);
+    } catch (error) {
+      console.error(error); alert('Gagal menghapus');
+    }
+  };
 
   const filteredTx = selectedProjectId === 'all' 
     ? transactions 
@@ -161,6 +176,7 @@ export function FinanceReports() {
                   <th className="p-4 font-semibold">Keterangan</th>
                   <th className="p-4 font-semibold text-right text-emerald-600">Debit (Masuk)</th>
                   <th className="p-4 font-semibold text-right text-rose-600">Kredit (Keluar)</th>
+                  <th className="p-4 font-semibold text-center">Aksi</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50 text-sm">
@@ -180,15 +196,27 @@ export function FinanceReports() {
                     <td className="p-4 text-right font-mono font-medium text-rose-600">
                       {t.type === 'EXPENSE' ? formatRupiah(t.amount) : '-'}
                     </td>
+                    <td className="p-4 text-center">
+                      <button onClick={() => setDeleteConfirmId(t.id!)} className="p-1.5 text-gray-400 hover:text-rose-600 rounded">
+                        <Trash2 size={14} />
+                      </button>
+                    </td>
                   </tr>
                 ))}
-                {filteredTx.length === 0 && <tr><td colSpan={4} className="p-8 text-center text-gray-500">Tidak ada transaksi tercatat.</td></tr>}
+                {filteredTx.length === 0 && <tr><td colSpan={5} className="p-8 text-center text-gray-500">Tidak ada transaksi tercatat.</td></tr>}
               </tbody>
             </table>
           </div>
         </div>
       )}
 
+      <ConfirmModal
+        isOpen={!!deleteConfirmId}
+        onClose={() => setDeleteConfirmId(null)}
+        onConfirm={handleDelete}
+        title="Hapus Transaksi"
+        message="Yakin ingin menghapus data transaksi ini? Transaksi yang dihapus akan mempengaruhi saldo dan buku kas."
+      />
     </div>
   );
 }

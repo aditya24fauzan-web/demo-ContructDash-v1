@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { collection, onSnapshot, query, orderBy } from 'firebase/firestore';
+import { collection, onSnapshot, query, orderBy, where } from 'firebase/firestore';
 import { db, Transaction, Project } from '../../lib/db';
+import { useAuth } from '../../lib/auth';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, BarChart, Bar, Legend } from 'recharts';
 import { format, subDays, parseISO, startOfMonth, endOfMonth, isWithinInterval, startOfWeek, endOfWeek } from 'date-fns';
 import { id } from 'date-fns/locale';
@@ -8,19 +9,21 @@ import clsx from 'clsx';
 import { TrendingUp, TrendingDown, RefreshCcw } from 'lucide-react';
 
 export function FinanceCashflow() {
+  const { profile } = useAuth();
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [viewState, setViewState] = useState<'weekly' | 'monthly'>('monthly');
 
   useEffect(() => {
-    const unsubTx = onSnapshot(query(collection(db, 'transactions'), orderBy('date', 'desc')), snap => {
+    if (!profile?.tenantId) return;
+    const unsubTx = onSnapshot(query(collection(db, 'transactions'), where('tenantId', '==', profile.tenantId), orderBy('date', 'desc')), snap => {
       setTransactions(snap.docs.map(d => ({ id: d.id, ...d.data() } as Transaction)).filter(t => t.status === 'COMPLETED'));
     });
-    const unsubProj = onSnapshot(query(collection(db, 'projects'), orderBy('createdAt', 'desc')), snap => {
+    const unsubProj = onSnapshot(query(collection(db, 'projects'), where('tenantId', '==', profile.tenantId), orderBy('createdAt', 'desc')), snap => {
       setProjects(snap.docs.map(d => ({ id: d.id, ...d.data() } as Project)));
     });
     return () => { unsubTx(); unsubProj(); };
-  }, []);
+  }, [profile?.tenantId]);
 
   const formatRupiah = (num: number) => new Intl.NumberFormat('id-ID').format(num);
   const today = new Date();

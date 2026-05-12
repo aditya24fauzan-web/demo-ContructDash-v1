@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { collection, onSnapshot, query, orderBy } from 'firebase/firestore';
+import { collection, onSnapshot, query, orderBy, where } from 'firebase/firestore';
 import { db, Transaction, Invoice, Payable, Project, Budget } from '../../lib/db';
 import { useAuth } from '../../lib/auth';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, BarChart, Bar } from 'recharts';
@@ -9,6 +9,7 @@ import { TrendingUp, TrendingDown, DollarSign, AlertCircle, FileText, Activity }
 import clsx from 'clsx';
 
 export function FinanceOverview() {
+  const { profile } = useAuth();
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [payables, setPayables] = useState<Payable[]>([]);
@@ -18,24 +19,25 @@ export function FinanceOverview() {
   const [budgets, setBudgets] = useState<Budget[]>([]);
 
   useEffect(() => {
-    const unsubTx = onSnapshot(query(collection(db, 'transactions'), orderBy('date', 'desc')), snap => {
+    if (!profile?.tenantId) return;
+    const unsubTx = onSnapshot(query(collection(db, 'transactions'), where('tenantId', '==', profile.tenantId), orderBy('date', 'desc')), snap => {
       setTransactions(snap.docs.map(d => ({ id: d.id, ...d.data() } as Transaction)));
     });
-    const unsubInv = onSnapshot(query(collection(db, 'invoices'), orderBy('date', 'desc')), snap => {
+    const unsubInv = onSnapshot(query(collection(db, 'invoices'), where('tenantId', '==', profile.tenantId), orderBy('date', 'desc')), snap => {
       setInvoices(snap.docs.map(d => ({ id: d.id, ...d.data() } as Invoice)));
     });
-    const unsubPay = onSnapshot(query(collection(db, 'payables'), orderBy('dueDate', 'asc')), snap => {
+    const unsubPay = onSnapshot(query(collection(db, 'payables'), where('tenantId', '==', profile.tenantId), orderBy('dueDate', 'asc')), snap => {
       setPayables(snap.docs.map(d => ({ id: d.id, ...d.data() } as Payable)));
     });
-    const unsubProj = onSnapshot(query(collection(db, 'projects'), orderBy('createdAt', 'desc')), snap => {
+    const unsubProj = onSnapshot(query(collection(db, 'projects'), where('tenantId', '==', profile.tenantId), orderBy('createdAt', 'desc')), snap => {
       setProjects(snap.docs.map(d => ({ id: d.id, ...d.data() } as Project)));
       setLoading(false);
     });
-    const unsubBudg = onSnapshot(query(collection(db, 'budgets')), snap => {
+    const unsubBudg = onSnapshot(query(collection(db, 'budgets'), where('tenantId', '==', profile.tenantId)), snap => {
       setBudgets(snap.docs.map(d => ({ id: d.id, ...d.data() } as Budget)));
     });
     return () => { unsubTx(); unsubInv(); unsubPay(); unsubProj(); unsubBudg(); };
-  }, []);
+  }, [profile?.tenantId]);
 
   if (loading) {
     return <div className="p-8 text-center text-gray-500">Memuat dashboard keuangan...</div>;

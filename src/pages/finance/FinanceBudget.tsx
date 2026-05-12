@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { collection, onSnapshot, query, addDoc, updateDoc, deleteDoc, doc, orderBy } from 'firebase/firestore';
+import { collection, onSnapshot, query, addDoc, updateDoc, deleteDoc, doc, orderBy, where } from 'firebase/firestore';
 import { db, Budget, Transaction, Project } from '../../lib/db';
 import { useAuth } from '../../lib/auth';
-import { Target, Search, Plus, Trash2, AlertTriangle, CheckCircle2 } from 'lucide-react';
+import { Target, Search, Plus, Trash2, AlertTriangle, CheckCircle2, Edit2 } from 'lucide-react';
 import clsx from 'clsx';
 import { ConfirmModal } from '../../components/ConfirmModal';
 import { CurrencyInput } from '../../components/CurrencyInput';
@@ -16,21 +16,23 @@ export function FinanceBudget() {
   const [selectedProjectId, setSelectedProjectId] = useState<string>('');
   const [showAddModal, setShowAddModal] = useState(false);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [editId, setEditId] = useState<string | null>(null);
 
   const [formData, setFormData] = useState({
     projectId: '', category: 'MATERIAL', plannedAmount: 0
   });
 
   useEffect(() => {
-    const unsubB = onSnapshot(query(collection(db, 'budgets'), orderBy('createdAt', 'desc')), snap => setBudgets(snap.docs.map(d => ({ id: d.id, ...d.data() } as Budget))));
-    const unsubT = onSnapshot(query(collection(db, 'transactions')), snap => setTransactions(snap.docs.map(d => ({ id: d.id, ...d.data() } as Transaction)).filter(t => t.type === 'EXPENSE' && t.status === 'COMPLETED')));
-    const unsubP = onSnapshot(query(collection(db, 'projects'), orderBy('createdAt', 'desc')), snap => {
+    if (!profile?.tenantId) return;
+    const unsubB = onSnapshot(query(collection(db, 'budgets'), where('tenantId', '==', profile.tenantId), orderBy('createdAt', 'desc')), snap => setBudgets(snap.docs.map(d => ({ id: d.id, ...d.data() } as Budget))));
+    const unsubT = onSnapshot(query(collection(db, 'transactions'), where('tenantId', '==', profile.tenantId)), snap => setTransactions(snap.docs.map(d => ({ id: d.id, ...d.data() } as Transaction)).filter(t => t.type === 'EXPENSE' && t.status === 'COMPLETED')));
+    const unsubP = onSnapshot(query(collection(db, 'projects'), where('tenantId', '==', profile.tenantId), orderBy('createdAt', 'desc')), snap => {
       const projs = snap.docs.map(d => ({ id: d.id, ...d.data() } as Project));
       setProjects(projs);
       if(projs.length > 0 && !selectedProjectId) setSelectedProjectId(projs[0].id!);
     });
     return () => { unsubB(); unsubT(); unsubP(); };
-  }, []);
+  }, [profile?.tenantId]);
 
   const formatRupiah = (num: number) => new Intl.NumberFormat('id-ID').format(num);
 
@@ -38,15 +40,25 @@ export function FinanceBudget() {
     e.preventDefault();
     try {
       const proj = projects.find(p => p.id === formData.projectId);
-      const data: Omit<Budget, 'id'> = {
-        projectId: formData.projectId,
-        projectName: proj?.name || '',
-        category: formData.category,
-        plannedAmount: Number(formData.plannedAmount),
-        createdAt: new Date().toISOString()
-      };
-      await addDoc(collection(db, 'budgets'), data);
+      if (editId) {
+        await updateDoc(doc(db, 'budgets', editId), {
+          projectId: formData.projectId,
+          projectName: proj?.name || '',
+          category: formData.category,
+          plannedAmount: Number(formData.plannedAmount)
+        });
+      } else {
+        const data: Omit<Budget, 'id'> = {
+          projectId: formData.projectId,
+          projectName: proj?.name || '',
+          category: formData.category,
+          plannedAmount: Number(formData.plannedAmount),
+          createdAt: new Date().toISOString()
+        };
+        await addDoc(collection(db, 'budgets'), { ...data, tenantId: profile?.tenantId || '' });
+      }
       setShowAddModal(false);
+      setEditId(null);
       setFormData({ ...formData, plannedAmount: 0 });
     } catch (error) {
       console.error(error); alert('Gagal menyimpan budget');
@@ -80,7 +92,7 @@ export function FinanceBudget() {
             {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
           </select>
         </div>
-        <button onClick={() => setShowAddModal(true)} className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700 transition flex items-center justify-center shadow-sm w-full md:w-auto">
+        <button onClick={() => { setEditId(null); setFormData({ projectId: selectedProjectId, category: 'MATERIAL', plannedAmount: 0 }); setShowAddModal(true); }} className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-indigo-700 transition flex items-center justify-center shadow-sm w-full md:w-auto">
           <Plus size={16} className="mr-2" /> Set RAB Kategori
         </button>
       </div>
@@ -135,9 +147,14 @@ export function FinanceBudget() {
                   </span>
                   {b.percent >= 100 && <AlertTriangle size={14} className="text-rose-500" />}
                 </div>
-                <button onClick={() => setDeleteConfirmId(b.id!)} className="text-gray-300 hover:text-rose-500 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <Trash2 size={16} />
-                </button>
+                <div className="flex gap-2 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
+                  <button onClick={() => { setEditId(b.id!); setFormData({ projectId: b.projectId, category: b.category, plannedAmount: b.plannedAmount }); setShowAddModal(true); }} className="text-gray-300 hover:text-indigo-600 transition-colors">
+                    <Edit2 size={16} />
+                  </button>
+                  <button onClick={() => setDeleteConfirmId(b.id!)} className="text-gray-300 hover:text-rose-500 transition-colors">
+                    <Trash2 size={16} />
+                  </button>
+                </div>
               </div>
               
               <div className="grid grid-cols-2 gap-4 text-sm mb-3">
@@ -175,20 +192,20 @@ export function FinanceBudget() {
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-md overflow-hidden animate-in zoom-in-95">
             <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50">
-              <h2 className="text-lg font-bold text-gray-900">Atur Anggaran / RAB</h2>
-              <button onClick={() => setShowAddModal(false)} className="text-gray-400 hover:text-gray-600">✕</button>
+              <h2 className="text-lg font-bold text-gray-900">{editId ? 'Edit Anggaran / RAB' : 'Atur Anggaran / RAB'}</h2>
+              <button onClick={() => { setShowAddModal(false); setEditId(null); }} className="text-gray-400 hover:text-gray-600">✕</button>
             </div>
             <form onSubmit={handleSubmit} className="p-6 space-y-4">
                <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Proyek Target</label>
-                  <select required value={formData.projectId} onChange={e => setFormData({...formData, projectId: e.target.value})} className="w-full border p-2 rounded-lg text-sm bg-gray-50">
+                  <select required value={formData.projectId} onChange={e => setFormData({...formData, projectId: e.target.value})} className="w-full border p-2 rounded-lg text-sm bg-gray-50" disabled={!!editId}>
                     <option value="">Pilih Proyek...</option>
                     {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
                   </select>
                </div>
                <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Kategori Biaya</label>
-                  <select required value={formData.category} onChange={e => setFormData({...formData, category: e.target.value})} className="w-full border p-2 rounded-lg text-sm">
+                  <select required value={formData.category} onChange={e => setFormData({...formData, category: e.target.value})} className="w-full border p-2 rounded-lg text-sm" disabled={!!editId}>
                     <option value="MATERIAL">Material & Bahan Baku</option>
                     <option value="LABOR">Upah Pengerja</option>
                     <option value="OPERATIONAL">Operasi, Alat, & Transport</option>
@@ -202,7 +219,7 @@ export function FinanceBudget() {
                   <CurrencyInput required value={formData.plannedAmount || 0} onChange={val => setFormData({...formData, plannedAmount: val})} className="w-full border p-2 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500" />
                </div>
                <div className="flex justify-end gap-3 mt-6">
-                <button type="button" onClick={() => setShowAddModal(false)} className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg text-sm font-medium">Batal</button>
+                <button type="button" onClick={() => { setShowAddModal(false); setEditId(null); }} className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg text-sm font-medium">Batal</button>
                 <button type="submit" className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 shadow-sm">Simpan RAB</button>
               </div>
             </form>

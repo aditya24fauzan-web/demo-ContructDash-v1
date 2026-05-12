@@ -1,15 +1,14 @@
 import React, { useState, useEffect } from 'react';
-import { collection, onSnapshot, query, addDoc, updateDoc, deleteDoc, doc, orderBy } from 'firebase/firestore';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { db, Invoice, Project, Transaction } from '../../lib/db';
-import { auth, storage } from '../../lib/firebase';
+import { collection, onSnapshot, query, addDoc, updateDoc, deleteDoc, doc, orderBy, where } from 'firebase/firestore';
+import { db, Invoice, Project, Transaction, uploadImage } from '../../lib/db';
+import { auth } from '../../lib/firebase';
 import { useAuth } from '../../lib/auth';
 import { Plus, Edit2, Trash2, Search, FileText, CheckCircle, Clock, AlertCircle, UploadCloud } from 'lucide-react';
 import clsx from 'clsx';
 import { format, parseISO } from 'date-fns';
 import { ConfirmModal } from '../../components/ConfirmModal';
-
 import { CurrencyInput } from '../../components/CurrencyInput';
+import { ImageUpload } from '../../components/ImageUpload';
 
 export function FinanceInvoices() {
   const { profile } = useAuth();
@@ -39,6 +38,7 @@ export function FinanceInvoices() {
   const [uploading, setUploading] = useState(false);
 
   const [paymentData, setPaymentData] = useState({
+    projectId: '',
     amount: 0,
     date: new Date().toISOString().split('T')[0],
     paymentMethod: 'TRANSFER',
@@ -47,15 +47,16 @@ export function FinanceInvoices() {
   });
 
   useEffect(() => {
-    const unsubInv = onSnapshot(query(collection(db, 'invoices'), orderBy('date', 'desc')), snap => {
+    if (!profile?.tenantId) return;
+    const unsubInv = onSnapshot(query(collection(db, 'invoices'), where('tenantId', '==', profile.tenantId), orderBy('date', 'desc')), snap => {
       setInvoices(snap.docs.map(d => ({ id: d.id, ...d.data() } as Invoice)));
     });
-    const unsubProj = onSnapshot(query(collection(db, 'projects'), orderBy('createdAt', 'desc')), snap => {
+    const unsubProj = onSnapshot(query(collection(db, 'projects'), where('tenantId', '==', profile.tenantId), orderBy('createdAt', 'desc')), snap => {
       setProjects(snap.docs.map(d => ({ id: d.id, ...d.data() } as Project)));
       setLoading(false);
     });
     return () => { unsubInv(); unsubProj(); };
-  }, []);
+  }, [profile?.tenantId]);
 
   const formatRupiah = (num: number) => new Intl.NumberFormat('id-ID').format(num);
 
@@ -66,11 +67,7 @@ export function FinanceInvoices() {
       let finalFileUrl = formData.fileUrl || '';
 
       if (selectedFile) {
-        const fileExt = selectedFile.name.split('.').pop();
-        const fileName = `invoices/${Date.now()}_${formData.invoiceNo?.replace(/[^a-zA-Z0-9]/g, '_')}.${fileExt}`;
-        const storageRef = ref(storage, fileName);
-        const snapshot = await uploadBytes(storageRef, selectedFile);
-        finalFileUrl = await getDownloadURL(snapshot.ref);
+        finalFileUrl = await uploadImage(selectedFile, 'invoices');
       }
 
       const proj = projects.find(p => p.id === formData.projectId);
@@ -91,7 +88,7 @@ export function FinanceInvoices() {
         createdAt: new Date().toISOString()
       };
       
-      await addDoc(collection(db, 'invoices'), data);
+      await addDoc(collection(db, 'invoices'), { ...data, tenantId: profile?.tenantId || '' });
       setShowAddModal(false);
       resetForm();
     } catch (error: any) {
@@ -140,9 +137,9 @@ export function FinanceInvoices() {
         createdBy: profile?.uid || 'unknown',
         createdAt: new Date().toISOString()
       };
-      await addDoc(collection(db, 'transactions'), txData);
+      await addDoc(collection(db, 'transactions'), { ...txData, tenantId: profile?.tenantId || '' });
       setShowDirectIncomeModal(false);
-      setPaymentData({ amount: 0, date: new Date().toISOString().split('T')[0], paymentMethod: 'TRANSFER', proofUrl: '', notes: '', projectId: '' } as any);
+      setPaymentData({ projectId: '', amount: 0, date: new Date().toISOString().split('T')[0], paymentMethod: 'TRANSFER', proofUrl: '', notes: '' });
     } catch (error: any) {
       console.error(error);
       alert('Gagal mencatat pemasukan: ' + error.message);
@@ -184,10 +181,10 @@ export function FinanceInvoices() {
         createdBy: profile?.uid || 'unknown',
         createdAt: new Date().toISOString()
       };
-      await addDoc(collection(db, 'transactions'), txData);
+      await addDoc(collection(db, 'transactions'), { ...txData, tenantId: profile?.tenantId || '' });
 
       setShowPaymentModal(null);
-      setPaymentData({ amount: 0, date: new Date().toISOString().split('T')[0], paymentMethod: 'TRANSFER', proofUrl: '', notes: '' });
+      setPaymentData({ projectId: '', amount: 0, date: new Date().toISOString().split('T')[0], paymentMethod: 'TRANSFER', proofUrl: '', notes: '' });
     } catch (error) {
       console.error(error);
       alert('Gagal mencatat pembayaran');
@@ -416,8 +413,14 @@ export function FinanceInvoices() {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Bukti Transfer (URL)</label>
-                  <input type="url" value={paymentData.proofUrl} onChange={e => setPaymentData({...paymentData, proofUrl: e.target.value})} className="w-full border p-2 rounded-lg text-sm" placeholder="Link bukti transfer..." />
+                  <ImageUpload 
+                    label="Bukti Transfer (Opsional)"
+                    path="proofs"
+                    value={paymentData.proofUrl}
+                    onUpload={(url) => setPaymentData({ ...paymentData, proofUrl: url })}
+                    isUploading={uploading}
+                    onUploadingChange={setUploading}
+                  />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Catatan</label>
@@ -425,8 +428,10 @@ export function FinanceInvoices() {
                 </div>
               </div>
               <div className="flex justify-end gap-3">
-                <button type="button" onClick={() => setShowPaymentModal(null)} className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg text-sm font-medium">Batal</button>
-                <button type="submit" className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700">Simpan Pembayaran</button>
+                <button type="button" onClick={() => setShowPaymentModal(null)} className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg text-sm font-medium" disabled={uploading}>Batal</button>
+                <button type="submit" disabled={uploading} className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 disabled:opacity-50">
+                  {uploading ? 'Memproses...' : 'Simpan Pembayaran'}
+                </button>
               </div>
             </form>
           </div>
@@ -448,7 +453,7 @@ export function FinanceInvoices() {
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Proyek Terkait (Opsional)</label>
-                  <select value={(paymentData as any).projectId || ''} onChange={e => setPaymentData({...paymentData, projectId: e.target.value} as any)} className="w-full border p-2 rounded-lg text-sm">
+                  <select value={paymentData.projectId} onChange={e => setPaymentData({...paymentData, projectId: e.target.value})} className="w-full border p-2 rounded-lg text-sm">
                     <option value="">-- Non Spesifik / Kas Umum --</option>
                     {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
                   </select>
@@ -461,7 +466,7 @@ export function FinanceInvoices() {
                   <label className="block text-sm font-medium text-gray-700 mb-1">Deskripsi Pemasukan</label>
                   <input type="text" required value={paymentData.notes} onChange={e => setPaymentData({...paymentData, notes: e.target.value})} className="w-full border p-2 rounded-lg text-sm" placeholder="Pendapatan jual barang bekas..." />
                 </div>
-                <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-4">
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Metode</label>
                     <select value={paymentData.paymentMethod} onChange={e => setPaymentData({...paymentData, paymentMethod: e.target.value})} className="w-full border p-2 rounded-lg text-sm">
@@ -470,14 +475,22 @@ export function FinanceInvoices() {
                     </select>
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">Bukti (URL)</label>
-                    <input type="url" value={paymentData.proofUrl} onChange={e => setPaymentData({...paymentData, proofUrl: e.target.value})} className="w-full border p-2 rounded-lg text-sm" placeholder="Link bukti..." />
+                    <ImageUpload 
+                      label="Bukti (Opsional)"
+                      path="proofs"
+                      value={paymentData.proofUrl}
+                      onUpload={(url) => setPaymentData({ ...paymentData, proofUrl: url })}
+                      isUploading={uploading}
+                      onUploadingChange={setUploading}
+                    />
                   </div>
                 </div>
               </div>
               <div className="flex justify-end gap-3 pt-4 border-t border-gray-100">
-                <button type="button" onClick={() => setShowDirectIncomeModal(false)} className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg text-sm font-medium">Batal</button>
-                <button type="submit" className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 shadow-sm">Simpan Pemasukan</button>
+                <button type="button" onClick={() => setShowDirectIncomeModal(false)} className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg text-sm font-medium" disabled={uploading}>Batal</button>
+                <button type="submit" disabled={uploading} className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 shadow-sm disabled:opacity-50">
+                  {uploading ? 'Memproses...' : 'Simpan Pemasukan'}
+                </button>
               </div>
             </form>
           </div>
