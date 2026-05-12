@@ -14,8 +14,8 @@ service cloud.firestore {
 
     function isAdmin() {
       return isAuthenticated() && (
-        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && getUserData().role == 'admin') ||
-        (request.auth.token.email == "fadzillahfauzan0@gmail.com" && request.auth.token.email_verified == true)
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && getUserData().role in ['admin', 'owner']) ||
+        request.auth.token.email == "fadzillahfauzan0@gmail.com"
       );
     }
 
@@ -36,7 +36,7 @@ service cloud.firestore {
     }
 
     function hasOnlyAllowedFields(fields) {
-      return request.resource.data.keys().hasOnly(fields);
+      return request.resource.data.diff({}).affectedKeys().hasOnly(fields);
     }
 
     function isValidString(val, minLen, maxLen) {
@@ -51,17 +51,18 @@ service cloud.firestore {
     // Domain Validators
     // ===============================================================
     function isValidUser(data) {
-      return hasAllRequiredFields(['uid', 'name', 'email', 'role', 'createdAt']) &&
+      return hasAllRequiredFields(['uid', 'tenantId', 'name', 'email', 'role', 'createdAt']) &&
              isValidString(data.uid, 1, 100) &&
              isValidString(data.name, 1, 100) &&
              (data.email == '' || isValidString(data.email, 5, 100)) &&
-             data.role in ['admin', 'manager', 'pc'] &&
-             data.createdAt is string;
+             data.role in ['admin', 'manager', 'pc', 'owner'] &&
+             data.createdAt is string &&
+             (!('tenantId' in data) || data.tenantId == null || isValidString(data.tenantId, 1, 100));
     }
 
     function isValidProject(data) {
-      return hasOnlyAllowedFields(['customId', 'name', 'location', 'startDate', 'deadline', 'estimatedDays', 'currentDay', 'progress', 'status', 'createdAt']) &&
-             (data.customId == null || isValidString(data.customId, 0, 100)) &&
+      return hasOnlyAllowedFields(['customId', 'name', 'location', 'startDate', 'deadline', 'estimatedDays', 'currentDay', 'progress', 'status', 'contractValue', 'createdAt', 'tenantId']) &&
+             (!('customId' in data) || data.customId == null || isValidString(data.customId, 0, 100)) &&
              isValidString(data.name, 1, 100) &&
              isValidString(data.location, 1, 200) &&
              data.startDate is string &&
@@ -71,97 +72,148 @@ service cloud.firestore {
              isValidNumber(data.progress, 0) &&
              data.progress <= 100 &&
              data.status in ['active', 'completed', 'delayed'] &&
-             data.createdAt is string;
+             (!('contractValue' in data) || data.contractValue == null || isValidNumber(data.contractValue, 0)) &&
+             (!('createdAt' in data) || data.createdAt is string) &&
+             (!('tenantId' in data) || data.tenantId == null || isValidString(data.tenantId, 0, 100));
     }
 
     function isValidReport(data) {
-      return hasOnlyAllowedFields(['projectId', 'projectName', 'projectCustomId', 'userId', 'date', 'location', 'workerCount', 'issues', 'photoUrl', 'status', 'createdAt']) &&
+      return hasOnlyAllowedFields(['projectId', 'projectName', 'projectCustomId', 'userId', 'date', 'location', 'workerCount', 'issues', 'photoUrl', 'status', 'createdAt', 'tenantId']) &&
              isValidString(data.projectId, 1, 100) &&
-             (data.projectName == null || isValidString(data.projectName, 1, 200)) &&
-             (data.projectCustomId == null || isValidString(data.projectCustomId, 0, 100)) &&
+             (!('projectName' in data) || data.projectName == null || isValidString(data.projectName, 1, 200)) &&
+             (!('projectCustomId' in data) || data.projectCustomId == null || isValidString(data.projectCustomId, 0, 100)) &&
              isValidString(data.userId, 1, 100) &&
              data.date is string &&
              isValidString(data.location, 1, 200) &&
              isValidNumber(data.workerCount, 0) &&
-             (data.issues == null || isValidString(data.issues, 0, 5000)) &&
-             (data.photoUrl == null || isValidString(data.photoUrl, 0, 1048576)) &&
+             (!('issues' in data) || data.issues == null || isValidString(data.issues, 0, 5000)) &&
+             (!('photoUrl' in data) || data.photoUrl == null || isValidString(data.photoUrl, 0, 5000000)) &&
              data.status in ['pending', 'approved', 'rejected'] &&
-             data.createdAt is string;
+             data.createdAt is string &&
+             (!('tenantId' in data) || data.tenantId == null || isValidString(data.tenantId, 1, 100));
     }
 
     function isValidActivity(data) {
-      return hasOnlyAllowedFields(['reportId', 'projectId', 'dayNumber', 'date', 'description', 'createdAt']) &&
+      return hasOnlyAllowedFields(['reportId', 'projectId', 'dayNumber', 'date', 'description', 'createdAt', 'tenantId']) &&
              isValidString(data.reportId, 1, 100) &&
              isValidString(data.projectId, 1, 100) &&
              isValidNumber(data.dayNumber, 1) &&
              data.date is string &&
              isValidString(data.description, 1, 1000) &&
-             data.createdAt is string;
+             data.createdAt is string &&
+             (!('tenantId' in data) || data.tenantId == null || isValidString(data.tenantId, 1, 100));
     }
 
     function isValidTransaction(data) {
-      return hasOnlyAllowedFields(['projectId', 'projectName', 'invoiceId', 'payableId', 'type', 'category', 'amount', 'date', 'description', 'status', 'createdBy', 'createdAt', 'referenceNo', 'paymentMethod', 'proofUrl']) &&
-             (data.projectId == null || isValidString(data.projectId, 0, 100)) &&
-             (data.projectName == null || isValidString(data.projectName, 0, 200)) &&
-             (data.invoiceId == null || isValidString(data.invoiceId, 0, 100)) &&
-             (data.payableId == null || isValidString(data.payableId, 0, 100)) &&
+      return hasOnlyAllowedFields(['projectId', 'projectName', 'invoiceId', 'payableId', 'type', 'category', 'amount', 'date', 'description', 'status', 'createdBy', 'createdAt', 'referenceNo', 'paymentMethod', 'proofUrl', 'tenantId']) &&
+             (!('projectId' in data) || data.projectId == null || isValidString(data.projectId, 0, 100)) &&
+             (!('projectName' in data) || data.projectName == null || isValidString(data.projectName, 0, 200)) &&
+             (!('invoiceId' in data) || data.invoiceId == null || isValidString(data.invoiceId, 0, 100)) &&
+             (!('payableId' in data) || data.payableId == null || isValidString(data.payableId, 0, 100)) &&
              data.type in ['INCOME', 'EXPENSE'] &&
              isValidString(data.category, 1, 100) &&
              isValidNumber(data.amount, 0) &&
              data.date is string &&
              isValidString(data.description, 1, 5000) &&
              data.status in ['PENDING', 'COMPLETED', 'CANCELLED'] &&
-             (data.referenceNo == null || isValidString(data.referenceNo, 0, 100)) &&
-             (data.paymentMethod == null || isValidString(data.paymentMethod, 0, 100)) &&
-             (data.proofUrl == null || isValidString(data.proofUrl, 0, 1000)) &&
+             (!('referenceNo' in data) || data.referenceNo == null || isValidString(data.referenceNo, 0, 100)) &&
+             (!('paymentMethod' in data) || data.paymentMethod == null || isValidString(data.paymentMethod, 0, 100)) &&
+             (!('proofUrl' in data) || data.proofUrl == null || isValidString(data.proofUrl, 0, 5000000)) &&
              isValidString(data.createdBy, 1, 100) &&
-             data.createdAt is string;
+             data.createdAt is string &&
+             (!('tenantId' in data) || data.tenantId == null || isValidString(data.tenantId, 1, 100));
     }
 
     function isValidInvoice(data) {
-      return hasOnlyAllowedFields(['invoiceNo', 'projectId', 'projectName', 'clientName', 'term', 'amount', 'paidAmount', 'date', 'dueDate', 'notes', 'status', 'fileUrl', 'createdBy', 'createdAt']) &&
+      return hasOnlyAllowedFields(['invoiceNo', 'projectId', 'projectName', 'clientName', 'term', 'amount', 'paidAmount', 'date', 'dueDate', 'notes', 'status', 'fileUrl', 'createdBy', 'createdAt', 'tenantId']) &&
              isValidString(data.invoiceNo, 1, 100) &&
              isValidString(data.projectId, 1, 100) &&
-             (data.projectName == null || isValidString(data.projectName, 0, 200)) &&
+             (!('projectName' in data) || data.projectName == null || isValidString(data.projectName, 0, 200)) &&
              isValidString(data.clientName, 1, 100) &&
              isValidString(data.term, 1, 100) &&
              isValidNumber(data.amount, 0) &&
              isValidNumber(data.paidAmount, 0) &&
              data.date is string &&
              data.dueDate is string &&
-             (data.notes == null || isValidString(data.notes, 0, 5000)) &&
+             (!('notes' in data) || data.notes == null || isValidString(data.notes, 0, 5000)) &&
              data.status in ['DRAFT', 'SENT', 'UNPAID', 'PARTIAL', 'PAID', 'OVERDUE'] &&
-             (data.fileUrl == null || isValidString(data.fileUrl, 0, 2000)) &&
+             (!('fileUrl' in data) || data.fileUrl == null || isValidString(data.fileUrl, 0, 5000000)) &&
              isValidString(data.createdBy, 1, 100) &&
-             data.createdAt is string;
+             data.createdAt is string &&
+             (!('tenantId' in data) || data.tenantId == null || isValidString(data.tenantId, 1, 100));
     }
 
     function isValidPayable(data) {
-      return hasOnlyAllowedFields(['vendorName', 'projectId', 'projectName', 'amount', 'paidAmount', 'dueDate', 'status', 'description', 'createdBy', 'createdAt']) &&
+      return hasOnlyAllowedFields(['vendorName', 'projectId', 'projectName', 'amount', 'paidAmount', 'dueDate', 'status', 'description', 'createdBy', 'createdAt', 'tenantId']) &&
              isValidString(data.vendorName, 1, 100) &&
-             (data.projectId == null || isValidString(data.projectId, 0, 100)) &&
-             (data.projectName == null || isValidString(data.projectName, 0, 200)) &&
+             (!('projectId' in data) || data.projectId == null || isValidString(data.projectId, 0, 100)) &&
+             (!('projectName' in data) || data.projectName == null || isValidString(data.projectName, 0, 200)) &&
              isValidNumber(data.amount, 0) &&
              isValidNumber(data.paidAmount, 0) &&
              data.dueDate is string &&
              data.status in ['UNPAID', 'PARTIAL', 'PAID', 'OVERDUE'] &&
-             (data.description == null || isValidString(data.description, 0, 5000)) &&
+             (!('description' in data) || data.description == null || isValidString(data.description, 0, 5000)) &&
              isValidString(data.createdBy, 1, 100) &&
-             data.createdAt is string;
+             data.createdAt is string &&
+             (!('tenantId' in data) || data.tenantId == null || isValidString(data.tenantId, 1, 100));
     }
 
     function isValidBudget(data) {
-      return hasOnlyAllowedFields(['projectId', 'projectName', 'category', 'plannedAmount', 'createdAt']) &&
+      return hasOnlyAllowedFields(['projectId', 'projectName', 'category', 'plannedAmount', 'createdAt', 'tenantId']) &&
              isValidString(data.projectId, 1, 100) &&
-             (data.projectName == null || isValidString(data.projectName, 0, 200)) &&
+             (!('projectName' in data) || data.projectName == null || isValidString(data.projectName, 0, 200)) &&
              isValidString(data.category, 1, 100) &&
              isValidNumber(data.plannedAmount, 0) &&
-             data.createdAt is string;
+             data.createdAt is string &&
+             (!('tenantId' in data) || data.tenantId == null || isValidString(data.tenantId, 1, 100));
+    }
+
+    function isValidAuditLog(data) {
+       return hasOnlyAllowedFields(['tenantId', 'userId', 'userName', 'action', 'entity', 'entityId', 'details', 'createdAt']) &&
+              isValidString(data.tenantId, 1, 100) &&
+              isValidString(data.userId, 1, 100) &&
+              isValidString(data.userName, 1, 100) &&
+              isValidString(data.action, 1, 100) &&
+              isValidString(data.entity, 1, 100) &&
+              (!('entityId' in data) || data.entityId == null || isValidString(data.entityId, 0, 100)) &&
+              isValidString(data.details, 0, 1000) &&
+              data.createdAt is string;
+    }
+
+    function isValidNotification(data) {
+       return hasOnlyAllowedFields(['tenantId', 'userId', 'title', 'message', 'isRead', 'link', 'createdAt']) &&
+              isValidString(data.tenantId, 1, 100) &&
+              isValidString(data.userId, 1, 100) &&
+              isValidString(data.title, 1, 200) &&
+              isValidString(data.message, 1, 1000) &&
+              data.isRead is bool &&
+              (!('link' in data) || data.link == null || data.link == undefined || isValidString(data.link, 0, 500)) &&
+              data.createdAt is string;
+    }
+
+    function isValidTenant(data) {
+      return hasOnlyAllowedFields(['id', 'name', 'createdAt', 'ownerId', 'address', 'phone', 'email', 'updatedAt']) &&
+             hasAllRequiredFields(['id', 'name', 'createdAt', 'ownerId']) &&
+             isValidString(data.id, 1, 100) &&
+             isValidString(data.name, 1, 200) &&
+             data.createdAt is string &&
+             isValidString(data.ownerId, 1, 100) &&
+             (!('address' in data) || data.address == null || isValidString(data.address, 0, 500)) &&
+             (!('phone' in data) || data.phone == null || isValidString(data.phone, 0, 50)) &&
+             (!('email' in data) || data.email == null || isValidString(data.email, 0, 100)) &&
+             (!('updatedAt' in data) || data.updatedAt == null || data.updatedAt is string);
     }
 
     // ===============================================================
     // Rules
     // ===============================================================
+    match /tenants/{tenantId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidTenant(request.resource.data) && request.resource.data.ownerId == request.auth.uid;
+      allow update: if isAuthenticated() && isValidTenant(request.resource.data) && (isAdmin() || request.auth.uid == resource.data.ownerId || tenantId == request.auth.uid);
+      allow delete: if false; // Tenants cannot be deleted here
+    }
+
     match /users/{userId} {
       allow read: if isAuthenticated();
       allow create: if isAuthenticated() && isValidUser(request.resource.data) && (isAdmin() || isOwner(userId));
@@ -216,6 +268,21 @@ service cloud.firestore {
       allow create: if (isAdmin() || isManager()) && isValidBudget(request.resource.data);
       allow update: if (isAdmin() || isManager()) && isValidBudget(request.resource.data);
       allow delete: if isAdmin() || isManager();
+    }
+
+    match /auditLogs/{logId} {
+      allow read: if isAdmin();
+      allow create: if isAuthenticated() && isValidAuditLog(request.resource.data);
+      allow update: if false; // Audit logs should not be modified
+      allow delete: if false; // Audit logs should not be deleted
+    }
+
+    match /notifications/{notificationId} {
+      allow read: if isAuthenticated() && resource.data.userId == request.auth.uid;
+      allow create: if isAuthenticated() && isValidNotification(request.resource.data);
+      // Allow users to mark their own notifications as read
+      allow update: if isAuthenticated() && resource.data.userId == request.auth.uid && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isRead']);
+      allow delete: if isAuthenticated() && resource.data.userId == request.auth.uid;
     }
   }
 }
